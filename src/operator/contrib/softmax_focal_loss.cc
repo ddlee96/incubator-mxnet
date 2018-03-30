@@ -2,13 +2,46 @@
 // Author: ddlee, me@ddlee.cn
 
 #include "./softmax_focal_loss-inl.h"
+#include <mshadow/base.h>
+#include <mshadow/tensor.h>
+#include "../mshadow_op.h"
+
+namespace mshadow {
+  template<typename DType>
+  inline void SoftmaxFocalLossForward(const Tensor<cpu, 4, DType> &X, // Logits; data
+                                      const Tensor<cpu, 4, DType> &T, // Labels; labels
+                                      const Tensor<cpu, 1, DType> &wp, // num of forground ; normalizer
+                                      const Tensor<cpu, 1, DType> &avg_loss, // average loss as output; loss
+                                      const Tensor<cpu, 4, DType> &P, //softmax probability, going to be re-used in gradient; prob
+                                      const Tensor<cpu, 4, DType> &losses_, // aux losses_ Tensor
+                                      const int num_classes_)
+  {
+      // not implemented
+      return;
+  };
+
+  template<typename DType>
+  inline void SoftmaxFocalLossBackwardAcc(const Tensor<cpu, 4, DType> &X, // Logits; data
+                                          const Tensor<cpu, 4, DType> &T, // Labels; labels
+                                          const Tensor<cpu, 1, DType> &wp, // num of forground ; normalizer
+                                          const Tensor<cpu, 4, DType> &P, //softmax probability; prob
+                                          const Tensor<cpu, 4, DType> &d_avg_loss, // gradient in
+                                          const Tensor<cpu, 4, DType> &dX, // gradient out
+                                          const Tensor<cpu, 4, DType> &buff_, // aux buff_ Tensor
+                                          const int num_classes_)
+  {
+      // not implemented
+      return;
+  };
+}
+
 
 namespace mxnet {
 namespace op {
 template<>
-Operator *CreateOp<cpu>(SoftmaxFocalLossParam param, int dtype) {
+Operator *CreateOp<cpu>(SoftmaxFocalLossParam param, int DType) {
   Operator *op = NULL;
-  MSHADOW_REAL_TYPE_SWITCH(dtype, DType, {
+  MSHADOW_REAL_TYPE_SWITCH(DType, DType, {
     op = new SoftmaxFocalLossOp<cpu, DType>(param);
   })
   return op;
@@ -40,7 +73,7 @@ See: https://arxiv.org/abs/1708.02002 for details.
 )code" ADD_FILELINE)
 .add_argument("data", "NDArray-or-Symbol", "4D tensor of softmax inputs (called 'scores' or 'logits') with shape (N, C, H, W), where C = num_anchors * num_classes defines num_anchors groups of contiguous num_classes softmax inputs.")
 .add_argument("label", "NDArray-or-Symbol", "4D tensor of labels with shape (N, num_anchors, H, W). Each entry is a class label in [0, num_classes - 1] (inclusive).")
-.add_argument("normalizer", "NDArray-or-Symbol"， "Scalar; the loss is normalized by 1 / max(1, normalizer).")
+.add_argument("normalizer", "NDArray-or-Symbol", "Scalar; the loss is normalized by 1 / max(1, normalizer).")
 .add_arguments(SoftmaxFocalLossParam::__FIELDS__());
 
 }  // namespace op

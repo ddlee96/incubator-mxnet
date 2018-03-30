@@ -1,7 +1,6 @@
 // Modified from Official Caffe2 implementation
 // Author: ddlee, me@ddlee.cn
 
-
 // A multiclass form of Focal Loss designed for use in RetinaNet-like models.
 // The input is assumed to be unnormalized scores (sometimes called 'logits')
 // arranged in a 4D tensor with shape (N, C, H, W), where N is the number of
@@ -17,48 +16,63 @@
 
 // See: https://arxiv.org/abs/1708.02002 for details.
 
-
 #ifndef MXNET_OPERATOR_SOFTMAX_FOCAL_LOSS_INL_H_
 #define MXNET_OPERATOR_SOFTMAX_FOCAL_LOSS_INL_H_
 
 #include <dmlc/logging.h>
 #include <dmlc/parameter.h>
 #include <mxnet/operator.h>
-#include "./mshadow_op.h"
-#include "./operator_common.h"
+#include <mxnet/base.h>
+#include "../mshadow_op.h"
+#include "../operator_common.h"
 
 // namespace
-namespace mxnet {
-namespace op {
+namespace mxnet
+{
+namespace op
+{
 
-//TODO: ???
-namespace softmax_focal_loss_enum {
-enum SoftmaxFocalLossOpInputs {kData, kLabel, kNorm};
-enum SoftmaxFocalLossOpOutputs {kLoss, kProb};
-}  // namespace softmaxout_enum
+namespace focalloss
+{
+enum SoftmaxFocalLossOpInputs
+{
+  kData,
+  kLabel,
+  kNorm
+};
+enum SoftmaxFocalLossOpOutputs
+{
+  kLoss,
+  kProb
+};
+enum SoftmaxFocalLossOpAuxiliary
+{
+  kLosses_,
+  kBuff_
+}; // mimicking protected losses_ buff_, need shapecheck
+} // namespace focalloss
 
-
-struct SoftmaxFocalLossParam : public dmlc::Parameter< SoftmaxFocalLossParam> {
+struct SoftmaxFocalLossParam : public dmlc::Parameter<SoftmaxFocalLossParam>
+{
   float grad_scale;
   float alpha;
   float gamma;
   int num_classes;
-  DMLC_DECLARE_PARAMETER(SoftmaxFocalLossParam) {
-    DMLC_DECLARE_FIELD(grad_scale).set_default(1.0f)
-    .describe("(float) default 1.0; multiply the loss by this scale factor.");
-    DMLC_DECLARE_FIELD(alpha).set_default(0.25f)
-    .describe("(float) default 0.25; Focal Loss's alpha hyper-parameter.");
-    DMLC_DECLARE_FIELD(gamma).set_default(1.0f)
-    .describe("(float) default 1.0; Focal Loss's gamma hyper-parameter.");
-    DMLC_DECLARE_FIELD(num_classes).set_default(81)
-    .describe("(int) default 81; number of classes in each softmax group.")
-  };
+  DMLC_DECLARE_PARAMETER(SoftmaxFocalLossParam)
+  {
+    DMLC_DECLARE_FIELD(grad_scale).set_default(1.0f).describe("(float) default 1.0; multiply the loss by this scale factor.");
+    DMLC_DECLARE_FIELD(alpha).set_default(0.25f).describe("(float) default 0.25; Focal Loss's alpha hyper-parameter.");
+    DMLC_DECLARE_FIELD(gamma).set_default(1.0f).describe("(float) default 1.0; Focal Loss's gamma hyper-parameter.");
+    DMLC_DECLARE_FIELD(num_classes).set_default(81).describe("(int) default 81; number of classes in each softmax group.");
+  }
 };
 
-template<typename xpu, typename DType>
-class SoftmaxFocalLossOp : public Operator {
- public:
-  explicit SoftmaxFocalLossOp(SoftmaxFocalLossParam p) {
+template <typename xpu, typename DType>
+class SoftmaxFocalLossOp : public Operator
+{
+public:
+  explicit SoftmaxFocalLossOp(SoftmaxFocalLossParam p)
+  {
     this->param_ = p;
   }
 
@@ -66,14 +80,13 @@ class SoftmaxFocalLossOp : public Operator {
                        const std::vector<TBlob> &in_data,
                        const std::vector<OpReqType> &req,
                        const std::vector<TBlob> &out_data,
-                       const std::vector<TBlob> &aux_args) {
+                       const std::vector<TBlob> &aux_args)
+  {
     using namespace mshadow;
     CHECK_EQ(in_data.size(), 3);
     CHECK_EQ(out_data.size(), 2);
 
     //TODO: shape check
-    CHECK_EQ(out_data[focalloss::kOut].shape_[0], in_data[focalloss::kBox].shape_[0]);
-    CHECK_EQ(out_data[focalloss::kMaxIdx].shape_[0], in_data[focalloss::kBox].shape_[0]);
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
     Tensor<xpu, 4, DType> data = in_data[focalloss::kData].get<xpu, 4, DType>(s);
@@ -81,12 +94,12 @@ class SoftmaxFocalLossOp : public Operator {
     Tensor<xpu, 1, DType> normalizer = in_data[focalloss::kNorm].get<xpu, 1, DType>(s);
     Tensor<xpu, 1, DType> loss = out_data[focalloss::kLoss].get<xpu, 1, DType>(s);
     Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> losses_ = aux_args[focalloss::kLosses_].get<xpu, 4, DType>(s);
     CHECK_EQ(data.CheckContiguous(), true);
     CHECK_EQ(labels.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    // TODO: Real Calculation
-    focallossForward(out, data, bbox, max_idx, param_.spatial_scale);
+    SoftmaxFocalLossForward(data, labels, normalizer, loss, prob, losses_, param_.num_classes);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -95,47 +108,151 @@ class SoftmaxFocalLossOp : public Operator {
                         const std::vector<TBlob> &out_data,
                         const std::vector<OpReqType> &req,
                         const std::vector<TBlob> &in_grad,
-                        const std::vector<TBlob> &aux_args) {
+                        const std::vector<TBlob> &aux_args)
+  {
     using namespace mshadow;
     CHECK_EQ(in_data.size(), 5);
     CHECK_EQ(out_data.size(), 1);
-    
+
     // TODO: shape check
-    CHECK_EQ(out_grad[focalloss::kOut].shape_[0], in_data[focalloss::kBox].shape_[0]);
-    CHECK_EQ(out_data[focalloss::kMaxIdx].shape_[0], in_data[focalloss::kBox].shape_[0]);
-    
+
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
-    Tensor<xpu, 4, DType> grad_out = out_grad[focalloss::kOut].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> grad_in = in_grad[focalloss::kData].get<xpu, 4, DType>(s);
 
     Tensor<xpu, 4, DType> data = in_data[focalloss::kData].get<xpu, 4, DType>(s);
     Tensor<xpu, 4, DType> labels = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
     Tensor<xpu, 1, DType> normalizer = in_data[focalloss::kNorm].get<xpu, 1, DType>(s);
     Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> grad_in = in_grad[focalloss::kData].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> grad_out = out_grad[focalloss::kLoss].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> buff_ = aux_args[focalloss::kBuff_].get<xpu, 4, DType>(s);
 
     CHECK_EQ(data.CheckContiguous(), true);
     CHECK_EQ(labels.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    // TODO: Real Calculation
-    if (kAddTo == req[focalloss::kData] || kWriteTo == req[focalloss::kData]) {
-      if (kWriteTo == req[focalloss::kData]) {
-        grad_in = 0.0f;
-      }
-      focallossBackwardAcc(grad_in, grad_out, bbox, max_idx, param_.spatial_scale);
-    }
-    if (kWriteTo == req[focalloss::kBox]) {
-      grad_roi = 0.0f;
-    }
+    SoftmaxFocalLossBackwardAcc(data, labels, normalizer, prob, grad_in, grad_out, buff_, param_.num_classes);
   }
 
- private:
+private:
   SoftmaxFocalLossParam param_;
-};  // class SoftmaxFocalLossOp
+}; // class SoftmaxFocalLossOp
 
 // Decalre Factory function, used for dispatch specialization
-template<typename xpu>
-Operator* CreateOp(SoftmaxFocalLossParam param, int dtype);
+template <typename xpu>
+Operator *CreateOp(SoftmaxFocalLossParam param, int dtype);
 
-#endif  // MXNET_OPERATOR_SOFTMAX_FOCAL_LOSS_INL_H_
+#if DMLC_USE_CXX11
+class SoftmaxFocalLossProp : public OperatorProperty
+{
+public:
+  std::vector<std::string> ListArguments() const override
+  {
+    return {"data", "labels", "normalizer"};
+  }
+
+  std::vector<std::string> ListOutputs() const override
+  {
+    return {"loss", "prob"};
+  }
+
+  int NumOutputs() const override
+  {
+    return 2;
+  }
+
+  int NumVisibleOutputs() const override
+  {
+    return 1;
+  }
+
+  void Init(const std::vector<std::pair<std::string, std::string>> &kwargs) override
+  {
+    param_.Init(kwargs);
+  }
+
+  std::map<std::string, std::string> GetParams() const override
+  {
+    return param_.__DICT__();
+  }
+
+  bool InferShape(std::vector<TShape> *in_shape,
+                  std::vector<TShape> *out_shape,
+                  std::vector<TShape> *aux_shape) const override
+  {
+    using namespace mshadow;
+    CHECK_EQ(in_shape->size(), 3U) << "Input:[data, labels, normalizer]";
+
+    // data: (N, C, H, W)
+    TShape dshape = in_shape->at(focalloss::kData);
+    CHECK_EQ(dshape.ndim(), 4U) << "data should be a 4D tensor";
+
+    // labels: (N, num_anchors, H, W)
+    TShape bshape = in_shape->at(focalloss::kLabel);
+    CHECK_EQ(bshape.ndim(), 4U) << "Labels should be a 4D tensor";
+
+    // normalizer: scalar
+    TShape nshape = in_shape->at(focalloss::kNorm);
+    CHECK_EQ(nshape.ndim(), 1U) << "Normalizer should be scalar";
+
+    // loss: scalar
+    // prob: (N, C, H, W)
+    out_shape->clear();
+    // TODO: shape infer
+    // out_shape->push_back(Shape(nshape));
+    // out_shape->push_back(Shape(dshape));
+    return true;
+  }
+
+  bool InferType(std::vector<int> *in_type,
+                 std::vector<int> *out_type,
+                 std::vector<int> *aux_type) const override
+  {
+    CHECK_EQ(in_type->size(), 2U);
+    int dtype = (*in_type)[0];
+    CHECK_EQ(dtype, (*in_type)[1]);
+    CHECK_NE(dtype, -1) << "Input must have specified type";
+
+    out_type->clear();
+    out_type->push_back(dtype);
+    out_type->push_back(dtype);
+    return true;
+  }
+
+  OperatorProperty *Copy() const override
+  {
+    SoftmaxFocalLossProp *softmax_focalloss_sym = new SoftmaxFocalLossProp();
+    softmax_focalloss_sym->param_ = this->param_;
+    return softmax_focalloss_sym;
+  }
+
+  std::string TypeString() const override
+  {
+    return "SoftmaxFocalLoss";
+  }
+
+  // decalre dependency and inplace optimization options
+  std::vector<int> DeclareBackwardDependency(
+      const std::vector<int> &out_grad,
+      const std::vector<int> &in_data,
+      const std::vector<int> &out_data) const override
+  {
+    return {out_grad[focalloss::kLoss], in_data[focalloss::kData], in_data[focalloss::kLabel], out_data[focalloss::kProb]};
+  }
+
+  Operator *CreateOperator(Context ctx) const override
+  {
+    LOG(FATAL) << "Not Implemented.";
+    return NULL;
+  }
+
+  Operator *CreateOperatorEx(Context ctx, std::vector<TShape> *in_shape,
+                             std::vector<int> *in_type) const override;
+
+private:
+  SoftmaxFocalLossParam param_;
+}; // class SoftmaxFocalLossProp
+#endif
+} // namespace op
+} // namespace mxnet
+#endif // MXNET_OPERATOR_SOFTMAX_FOCAL_LOSS_INL_H_
