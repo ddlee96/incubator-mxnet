@@ -14,7 +14,9 @@ namespace mshadow {
                                       const Tensor<cpu, 1, DType> &avg_loss, // average loss as output; loss
                                       const Tensor<cpu, 4, DType> &P, //softmax probability, going to be re-used in gradient; prob
                                       const Tensor<cpu, 4, DType> &losses_, // aux losses_ Tensor
-                                      const int num_classes_)
+                                      const int num_classes_,
+                                      const float gamma_,
+                                      const float alpha_)
   {
       // not implemented
       return;
@@ -28,7 +30,9 @@ namespace mshadow {
                                           const Tensor<cpu, 4, DType> &d_avg_loss, // gradient in
                                           const Tensor<cpu, 4, DType> &dX, // gradient out
                                           const Tensor<cpu, 4, DType> &buff_, // aux buff_ Tensor
-                                          const int num_classes_)
+                                          const int num_classes_,
+                                          const float gamma_,
+                                          const float alpha_)
   {
       // not implemented
       return;

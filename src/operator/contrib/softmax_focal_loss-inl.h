@@ -99,7 +99,7 @@ public:
     CHECK_EQ(labels.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    SoftmaxFocalLossForward(data, labels, normalizer, loss, prob, losses_, param_.num_classes);
+    SoftmaxFocalLossForward(data, labels, normalizer, loss, prob, losses_, param_.num_classes, param_.gamma, param_.alpha);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -131,7 +131,7 @@ public:
     CHECK_EQ(labels.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    SoftmaxFocalLossBackwardAcc(data, labels, normalizer, prob, grad_in, grad_out, buff_, param_.num_classes);
+    SoftmaxFocalLossBackwardAcc(data, labels, normalizer, prob, grad_in, grad_out, buff_, param_.num_classes, param_.gamma, param_.alpha);
   }
 
 private:

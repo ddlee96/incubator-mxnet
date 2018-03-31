@@ -3,19 +3,16 @@
 
 #include "./softmax_focal_loss-inl.h"
 #include <mshadow/tensor.h>
-#include <mshadow/cuda/tensor_gpu-inl.cuh>
-#include <mshadow/cuda/reduce.cuh>
-#include <vector>
-#include <algorithm>
+#include "../mshadow_op.h"
 
 namespace mshadow {
 namespace cuda {
 
     template<typename DType>
     __global__ void SpatialSoftmaxKernel(const int N, const int A,
-        const int H, const int W, const float* Xdata, float* Pdata,
+        const int H, const int W, const DType *Xdata, DType *Pdata,
         const int num_classes) {
-        CUDA_1D_KERNEL_LOOP(index, N * A * H * W) {
+        CUDA_KERNEL_LOOP(index, N * A * H * W) {
         int D = num_classes * A;
         int x = index % W;
         int y = (index / W) % H;
@@ -47,10 +44,10 @@ namespace cuda {
     template<typename DType>
     __global__ void SoftmaxFocalLossKernel(
         const int N, const int A, const int H, const int W,
-        const float* Pdata, const int* targets, float* losses,
-        const float* weight_pos, const float gamma, const float alpha,
+        const DType *Pdata, const DType *targets, DType *losses,
+        const DType *weight_pos, const float gamma, const float alpha,
         const int num_classes) {
-        CUDA_1D_KERNEL_LOOP(i, N * A * H * W) {
+        CUDA_KERNEL_LOOP(i, N * A * H * W) {
         int D = A * num_classes;
         int x = i % W;
         int y = (i / W) % H;
@@ -76,10 +73,10 @@ namespace cuda {
     template<typename DType>
     __global__ void SoftmaxFocalLossGradientWeightKernel(
         const int N, const int A, const int H, const int W,
-        const float* Pdata, const int* targets, float* buff,
-        const float* weight_pos, const float gamma, const float alpha,
+        const DType *Pdata, const DType *targets, DType *buff,
+        const DType *weight_pos, const float gamma, const float alpha,
         const int num_classes) {
-        CUDA_1D_KERNEL_LOOP(i, N * A * H * W) {
+        CUDA_KERNEL_LOOP(i, N * A * H * W) {
         int D = A * num_classes;
         int x = i % W;
         int y = (i / W) % H;
@@ -106,9 +103,9 @@ namespace cuda {
     template<typename DType>
     __global__ void SoftmaxFocalLossGradientKernel(
         const int N, const int D, const int H, const int W,
-        const float* Pdata, const int* targets, const float* buff,
-        const float* d_loss_data, float* dX, const int num_classes) {
-        CUDA_1D_KERNEL_LOOP(i, N * D * H * W) {
+        const DType *Pdata, const DType *targets, const DType *buff,
+        const DType *d_loss_data, DType *dX, const int num_classes) {
+        CUDA_KERNEL_LOOP(i, N * D * H * W) {
         int A = D / num_classes;
         int x = i % W;
         int y = (i / W) % H;
@@ -130,53 +127,64 @@ namespace cuda {
 
     template<typename DType>
     inline void SoftmaxFocalLossForward(const Tensor<gpu, 4, DType> &X, // Logits; data
+                                        const Tensor<gpu, 4, DType> &T, // Labels; labels
+                                        const Tensor<gpu, 1, DType> &wp, // num of forground ; normalizer
+                                        const Tensor<gpu, 1, DType> &avg_loss, // average loss as output; loss
+                                        const Tensor<gpu, 4, DType> &P, //softmax probability, going to be re-used in gradient; prob
                                         const Tensor<gpu, 4, DType> &losses_, // aux losses_ Tensor
-                                        const int num_classes_)
+                                        const int num_classes_,
+                                        const float gamma_,
+                                        const float alpha_)
     {
-    int N = X.dim32(0);
-    int D = X.dim32(1);
-    int H = X.dim32(2);
-    int W = X.dim32(3);
+    int N = X.size(0);
+    int D = X.size(1);
+    int H = X.size(2);
+    int W = X.size(3);
     int A = D / num_classes_;
 
-    losses_.Resize(N * A * H * W);
-    P->Resize(N * D * H * W);
-    avg_loss->Resize(vector<TIndex>());
-    math::Set<float, CUDAContext>(
-        avg_loss->size(), 0.f, avg_loss->mutable_data<float>(), &context_);
-    math::Set<float, CUDAContext>(
-        P->size(), 0.f, P->mutable_data<float>(), &context_);
-    math::Set<float, CUDAContext>(
-        losses_.size(), 0.f, losses_.mutable_data<float>(), &context_);
-    DCHECK_EQ(X.ndim(), 4);
+    // P->Resize(N * D * H * W);
+    // avg_loss->Resize(vector<TIndex>());
+    // math::Set<float, CUDAContext>(
+    //     avg_loss->size(), 0.f, avg_loss.dptr_, &context_);
+    // math::Set<float, CUDAContext>(
+    //     P->size(), 0.f, P.dptr_, &context_);
+    // math::Set<float, CUDAContext>(
+    //     losses_.size(), 0.f, losses_.dptr_, &context_);
+    DCHECK_EQ(X.MSize(), 4);
 
-    const float* Xdata = X.data<float>();
-    const float* Wdata = wp.data<float>();
+    const DType *Xdata = X.dptr_;
+
+    DType *Pdata = P.dptr_;
 
     // Spatial Softmax Kernel
     dim3 dimGrid(N * A * H * W);
     dim3 dimBlock(kMaxThreadsPerBlock);
-    CheckLaunchParam(dimGrid, dimBlock, "SpatialSoftmaxKernel")
-    cudaStream_t stream = Stream<gpu>::GetStream(out.stream_);
+    CheckLaunchParam(dimGrid, dimBlock, "SpatialSoftmaxKernel");
+    // calculate softmax probabilities: Pdata
+    cudaStream_t stream = Stream<gpu>::GetStream(losses_.stream_);
     SpatialSoftmaxKernel<DType><<<dimGrid, dimBlock, 0, stream>>>(
-        N, A, H, W, Xdata, P->mutable_data<float>(), num_classes_);
+        N, A, H, W, Xdata, Pdata, num_classes_);
 
     // Compute loss for each x,y location
-    const int* Tdata = T.data<int>();
+    const DType *Tdata = T.dptr_;
+    const DType *Wdata = wp.dptr_;
+    DType *Ldata = losses_.dptr_;
 
-    dim3 dimGrid(N * A * H * W);
-    dim3 dimBlock(kMaxThreadsPerBlock);
-    CheckLaunchParam(dimGrid, dimBlock, "SoftmaxFocalLossKernel")
-    cudaStream_t stream = Stream<gpu>::GetStream(out.stream_);
+    // dim3 dimGrid(N * A * H * W);
+    // dim3 dimBlock(kMaxThreadsPerBlock);
+    CheckLaunchParam(dimGrid, dimBlock, "SoftmaxFocalLossKernel");
+    // cudaStream_t stream = Stream<gpu>::GetStream(losses_.stream_);
     SoftmaxFocalLossKernel<DType><<<dimGrid, dimBlock, 0, stream>>>(
-        N, A, H, W, P->data<float>(), Tdata, losses_.mutable_data<float>(), Wdata, gamma_, alpha_, num_classes_);
+        N, A, H, W, Pdata, Tdata, Ldata, Wdata, gamma_, alpha_, num_classes_);
 
-    // sum the losses
-    float* avg_loss_data = avg_loss->mutable_data<float>();
-    math::Sum<float, CUDAContext>(
-        losses_.size(), losses_.data<float>(), avg_loss_data, &context_);
-    math::Scale<float, CUDAContext>(
-        1, scale_, avg_loss_data, avg_loss_data, &context_);
+    DType *avg_loss_data = avg_loss.dptr_;
+
+    // sum the losses: from losses_ to avg_loss
+    mshadow::nansum(avg_loss_data, Ldata);
+    // math::Sum<float, CUDAContext>(
+    //     losses_.size(), losses_.data<float>(), avg_loss_data, &context_);
+    // math::Scale<float, CUDAContext>(
+    //     1, scale_, avg_loss_data, avg_loss_data, &context_);
     }
 
 
@@ -188,45 +196,48 @@ namespace cuda {
                                             const Tensor<gpu, 4, DType> &d_avg_loss, // gradient in
                                             const Tensor<gpu, 4, DType> &dX, // gradient out
                                             const Tensor<gpu, 4, DType> &buff_, // aux buff_ Tensor
-                                            const int num_classes_
-    )
+                                            const int num_classes_,
+                                            const float gamma_,
+                                            const float alpha_)
     {
-    int N = X.dim32(0);
-    int D = X.dim32(1);
-    int H = X.dim32(2);
-    int W = X.dim32(3);
+    int N = X.size(0);
+    int D = X.size(1);
+    int H = X.size(2);
+    int W = X.size(3);
     int A = D / num_classes_;
 
-    buff_.Resize(N * A * H * W);
+    // buff_.Resize(N * A * H * W);
 
-    dX->ResizeLike(X);
+    // dX->ResizeLike(X);
 
-    const float* Xdata = X.data<float>();
-    const int* Tdata = T.data<int>();
-    const float* Pdata = P.data<float>();
-    const float* Wdata = wp.data<float>();
+    //const DType *Xdata = X.dptr_;
+    const DType *Tdata = T.dptr_;
+    const DType *Pdata = P.dptr_;
+    const DType *Wdata = wp.dptr_;
 
+    DType *Bdata = buff_.dptr_;
 
     // Compute the weight for gradients
     dim3 dimGrid(N * A * H * W);
     dim3 dimBlock(kMaxThreadsPerBlock);
-    CheckLaunchParam(dimGrid, dimBlock, "SoftmaxFocalLossGradientWeightKernel")
-    cudaStream_t stream = Stream<gpu>::GetStream(out.stream_);
-    SoftmaxFocalLossGradientWeightKernel<DType><<<dimGrid, dimBlock, 0, stream>>>(N, A, H, W, Pdata, Tdata, buff_.mutable_data<float>(),
+    CheckLaunchParam(dimGrid, dimBlock, "SoftmaxFocalLossGradientWeightKernel");
+    cudaStream_t stream = Stream<gpu>::GetStream(buff_.stream_);
+    SoftmaxFocalLossGradientWeightKernel<DType><<<dimGrid, dimBlock, 0, stream>>>(N, A, H, W, Pdata, Tdata, Bdata,
         Wdata, gamma_, alpha_, num_classes_);
 
-    // Compute the gradient with the weights
-    const float* Bdata = buff_.data<float>();
-    dim3 dimGrid(N * D * H * W);
-    dim3 dimBlock(kMaxThreadsPerBlock);
-    CheckLaunchParam(dimGrid, dimBlock, "SoftmaxFocalLossGradientWeightKernel")
-    cudaStream_t stream = Stream<gpu>::GetStream(out.stream_);
-    SoftmaxFocalLossGradientKernel<DType><<<dimGrid, dimBlock, 0, stream>>>(N, D, H, W, Pdata, Tdata, Bdata, d_avg_loss.data<float>(),
-        dX->mutable_data<float>(), num_classes_);
 
-    math::Scale<float, CUDAContext>(
-        dX->size(), scale_, dX->data<float>(), dX->mutable_data<float>(),
-        &context_);
+    DType *dXdata = dX.dptr_;
+    DType *dALdata = d_avg_loss.dptr_;
+    
+    // Compute the gradient with the weights
+    dim3 dimGrid_(N * D * H * W);
+    CheckLaunchParam(dimGrid_, dimBlock, "SoftmaxFocalLossGradientWeightKernel");
+    // cudaStream_t stream = Stream<gpu>::GetStream(buff_.stream_);
+    SoftmaxFocalLossGradientKernel<DType><<<dimGrid, dimBlock, 0, stream>>>(N, D, H, W, Pdata, Tdata, Bdata, dALdata, dXdata, num_classes_);
+
+    // math::Scale<float, CUDAContext>(
+    //     dX->size(), scale_, dX.dptr_, dX.dptr_,
+    //     &context_);
     }
 } // cuda
 
@@ -238,9 +249,11 @@ namespace cuda {
                                         const Tensor<gpu, 1, DType> &avg_loss, // average loss as output; loss
                                         const Tensor<gpu, 4, DType> &P, //softmax probability, going to be re-used in gradient; prob
                                         const Tensor<gpu, 4, DType> &losses_, // aux losses_ Tensor
-                                        const int num_classes_)
+                                        const int num_classes_,
+                                        const float gamma_,
+                                        const float alpha_)
     {
-        cuda::SoftmaxFocalLossForward(X, T, wp, avg_loss, P, losses_, num_classes_);
+        cuda::SoftmaxFocalLossForward(X, T, wp, avg_loss, P, losses_, num_classes_, gamma_, alpha_);
     };
 
     template<typename DType>
@@ -251,9 +264,11 @@ namespace cuda {
                                             const Tensor<gpu, 4, DType> &d_avg_loss, // gradient in
                                             const Tensor<gpu, 4, DType> &dX, // gradient out
                                             const Tensor<gpu, 4, DType> &buff_, // aux buff_ Tensor
-                                            const int num_classes_)
+                                            const int num_classes_,
+                                            const float gamma_,
+                                            const float alpha_)
     {
-        cuda::SoftmaxFocalLossBackwardAcc(X, T, wp, P, d_avg_loss, dX, buff_, num_classes_);
+        cuda::SoftmaxFocalLossBackwardAcc(X, T, wp, P, d_avg_loss, dX, buff_, num_classes_, gamma_, alpha_);
     };
 
 } // mshadow
