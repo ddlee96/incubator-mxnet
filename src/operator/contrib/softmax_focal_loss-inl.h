@@ -90,16 +90,16 @@ public:
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
     Tensor<xpu, 4, DType> data = in_data[focalloss::kData].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> labels = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> label = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
     Tensor<xpu, 1, DType> normalizer = in_data[focalloss::kNorm].get<xpu, 1, DType>(s);
     Tensor<xpu, 1, DType> loss = out_data[focalloss::kLoss].get<xpu, 1, DType>(s);
     Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
     Tensor<xpu, 4, DType> losses_ = aux_args[focalloss::kLosses_].get<xpu, 4, DType>(s);
     CHECK_EQ(data.CheckContiguous(), true);
-    CHECK_EQ(labels.CheckContiguous(), true);
+    CHECK_EQ(label.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    SoftmaxFocalLossForward(data, labels, normalizer, loss, prob, losses_, param_.num_classes, param_.gamma, param_.alpha);
+    SoftmaxFocalLossForward(data, label, normalizer, loss, prob, losses_, param_.num_classes, param_.gamma, param_.alpha);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -120,7 +120,7 @@ public:
 
 
     Tensor<xpu, 4, DType> data = in_data[focalloss::kData].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> labels = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> label = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
     Tensor<xpu, 1, DType> normalizer = in_data[focalloss::kNorm].get<xpu, 1, DType>(s);
     Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
     Tensor<xpu, 4, DType> grad_in = in_grad[focalloss::kData].get<xpu, 4, DType>(s);
@@ -128,10 +128,10 @@ public:
     Tensor<xpu, 4, DType> buff_ = aux_args[focalloss::kBuff_].get<xpu, 4, DType>(s);
 
     CHECK_EQ(data.CheckContiguous(), true);
-    CHECK_EQ(labels.CheckContiguous(), true);
+    CHECK_EQ(label.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    SoftmaxFocalLossBackwardAcc(data, labels, normalizer, prob, grad_in, grad_out, buff_, param_.num_classes, param_.gamma, param_.alpha);
+    SoftmaxFocalLossBackwardAcc(data, label, normalizer, prob, grad_in, grad_out, buff_, param_.num_classes, param_.gamma, param_.alpha);
   }
 
 private:
@@ -148,7 +148,7 @@ class SoftmaxFocalLossProp : public OperatorProperty
 public:
   std::vector<std::string> ListArguments() const override
   {
-    return {"data", "labels", "normalizer"};
+    return {"data", "label", "normalizer"};
   }
 
   std::vector<std::string> ListOutputs() const override
@@ -163,7 +163,7 @@ public:
 
   int NumVisibleOutputs() const override
   {
-    return 1;
+    return 2;
   }
 
   void Init(const std::vector<std::pair<std::string, std::string>> &kwargs) override
@@ -181,43 +181,52 @@ public:
                   std::vector<TShape> *aux_shape) const override
   {
     using namespace mshadow;
-    CHECK_EQ(in_shape->size(), 3U) << "Input:[data, labels, normalizer]";
+    CHECK_EQ(in_shape->size(), 3U) << "Input:[data, label, normalizer]";
 
-    // data: (N, C, H, W)
+    // data: (N, C, H, W) C = num_anchors * num_class
     TShape dshape = in_shape->at(focalloss::kData);
     CHECK_EQ(dshape.ndim(), 4U) << "data should be a 4D tensor";
 
-    // labels: (N, num_anchors, H, W)
-    TShape bshape = in_shape->at(focalloss::kLabel);
-    CHECK_EQ(bshape.ndim(), 4U) << "Labels should be a 4D tensor";
+    // label: (N, num_anchors, H, W)
+    TShape lshape = in_shape->at(focalloss::kLabel);
+    CHECK_EQ(lshape.ndim(), 4U) << "label should be a 4D tensor";
 
     // normalizer: scalar
     TShape nshape = in_shape->at(focalloss::kNorm);
     CHECK_EQ(nshape.ndim(), 1U) << "Normalizer should be scalar";
 
-    // loss: scalar
-    // prob: (N, C, H, W)
     out_shape->clear();
-    // TODO: shape infer
-    // out_shape->push_back(Shape(nshape));
-    // out_shape->push_back(Shape(dshape));
+    // loss: scalar
+    out_shape->push_back(Shape1(nshape[0]));
+    // prob: (N, C, H, W)
+    out_shape->push_back(Shape4(dshape[0], dshape[1], dshape[2], dshape[3]));
+
+    aux_shape->clear();
+    // losses_: (N, num_anchors, H, W)
+    aux_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
+    // buff_: (N, num_anchors, H, W)
+    aux_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
     return true;
   }
 
-  bool InferType(std::vector<int> *in_type,
-                 std::vector<int> *out_type,
-                 std::vector<int> *aux_type) const override
-  {
-    CHECK_EQ(in_type->size(), 2U);
-    int dtype = (*in_type)[0];
-    CHECK_EQ(dtype, (*in_type)[1]);
-    CHECK_NE(dtype, -1) << "Input must have specified type";
+  // bool InferType(std::vector<int> *in_type,
+  //                std::vector<int> *out_type,
+  //                std::vector<int> *aux_type) const override
+  // {
+  //   CHECK_EQ(in_type->size(), 2U);
+  //   int dtype = (*in_type)[0];
+  //   CHECK_EQ(dtype, (*in_type)[1]);
+  //   CHECK_NE(dtype, -1) << "Input must have specified type";
 
-    out_type->clear();
-    out_type->push_back(dtype);
-    out_type->push_back(dtype);
-    return true;
-  }
+  //   out_type->clear();
+  //   out_type->push_back(dtype);
+  //   out_type->push_back(dtype);
+
+  //   aux_type->clear();
+  //   aux_type->push_back(dtype);
+  //   aux_type->push_back(dtype);
+  //   return true;
+  // }
 
   OperatorProperty *Copy() const override
   {
@@ -228,7 +237,7 @@ public:
 
   std::string TypeString() const override
   {
-    return "SoftmaxFocalLoss";
+    return "_contrib_SoftmaxFocalLoss";
   }
 
   // decalre dependency and inplace optimization options
@@ -237,7 +246,7 @@ public:
       const std::vector<int> &in_data,
       const std::vector<int> &out_data) const override
   {
-    return {out_grad[focalloss::kLoss], in_data[focalloss::kData], in_data[focalloss::kLabel], out_data[focalloss::kProb]};
+    return {out_grad[focalloss::kLoss], out_data[focalloss::kProb], in_data[focalloss::kData], in_data[focalloss::kLabel], };
   }
 
   Operator *CreateOperator(Context ctx) const override

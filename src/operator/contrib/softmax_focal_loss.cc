@@ -59,7 +59,7 @@ Operator *SoftmaxFocalLossProp::CreateOperatorEx(Context ctx, std::vector<TShape
 
 DMLC_REGISTER_PARAMETER(SoftmaxFocalLossParam);
 
-MXNET_REGISTER_OP_PROPERTY(SoftmaxFocalLoss, SoftmaxFocalLossProp)
+MXNET_REGISTER_OP_PROPERTY(_contrib_SoftmaxFocalLoss, SoftmaxFocalLossProp)
 .describe(R"code(A multiclass form of Focal Loss designed for use in RetinaNet-like models.
 The input is assumed to be unnormalized scores (sometimes called 'logits')
 arranged in a 4D tensor with shape (N, C, H, W), where N is the number of
