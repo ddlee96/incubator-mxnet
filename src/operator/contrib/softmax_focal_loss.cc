@@ -11,9 +11,8 @@ namespace mshadow {
   inline void SoftmaxFocalLossForward(const Tensor<cpu, 4, DType> &X, // Logits; data
                                       const Tensor<cpu, 4, DType> &T, // Labels; labels
                                       const Tensor<cpu, 1, DType> &wp, // num of forground ; normalizer
-                                      const Tensor<cpu, 1, DType> &avg_loss, // average loss as output; loss
+                                      const Tensor<cpu, 4, DType> &loss, // output loss
                                       const Tensor<cpu, 4, DType> &P, //softmax probability, going to be re-used in gradient; prob
-                                      const Tensor<cpu, 4, DType> &losses_, // aux losses_ Tensor
                                       const int num_classes_,
                                       const float gamma_,
                                       const float alpha_)

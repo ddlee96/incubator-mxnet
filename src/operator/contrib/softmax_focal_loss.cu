@@ -129,9 +129,8 @@ namespace cuda {
     inline void SoftmaxFocalLossForward(const Tensor<gpu, 4, DType> &X, // Logits; data
                                         const Tensor<gpu, 4, DType> &T, // Labels; labels
                                         const Tensor<gpu, 1, DType> &wp, // num of forground ; normalizer
-                                        const Tensor<gpu, 1, DType> &avg_loss, // average loss as output; loss
+                                        const Tensor<gpu, 4, DType> &loss,
                                         const Tensor<gpu, 4, DType> &P, //softmax probability, going to be re-used in gradient; prob
-                                        const Tensor<gpu, 4, DType> &losses_, // aux losses_ Tensor
                                         const int num_classes_,
                                         const float gamma_,
                                         const float alpha_)
@@ -150,8 +149,6 @@ namespace cuda {
     //     P->size(), 0.f, P.dptr_, &context_);
     // math::Set<float, CUDAContext>(
     //     losses_.size(), 0.f, losses_.dptr_, &context_);
-    DCHECK_EQ(X.MSize(), 4);
-
     const DType *Xdata = X.dptr_;
 
     DType *Pdata = P.dptr_;
@@ -161,14 +158,14 @@ namespace cuda {
     dim3 dimBlock(kMaxThreadsPerBlock);
     CheckLaunchParam(dimGrid, dimBlock, "SpatialSoftmaxKernel");
     // calculate softmax probabilities: Pdata
-    cudaStream_t stream = Stream<gpu>::GetStream(losses_.stream_);
+    cudaStream_t stream = Stream<gpu>::GetStream(loss.stream_);
     SpatialSoftmaxKernel<DType><<<dimGrid, dimBlock, 0, stream>>>(
         N, A, H, W, Xdata, Pdata, num_classes_);
 
     // Compute loss for each x,y location
     const DType *Tdata = T.dptr_;
     const DType *Wdata = wp.dptr_;
-    DType *Ldata = losses_.dptr_;
+    DType *Ldata = loss.dptr_;
 
     // dim3 dimGrid(N * A * H * W);
     // dim3 dimBlock(kMaxThreadsPerBlock);
@@ -177,10 +174,10 @@ namespace cuda {
     SoftmaxFocalLossKernel<DType><<<dimGrid, dimBlock, 0, stream>>>(
         N, A, H, W, Pdata, Tdata, Ldata, Wdata, gamma_, alpha_, num_classes_);
 
-    DType *avg_loss_data = avg_loss.dptr_;
+    //DType *avg_loss_data = avg_loss.dptr_;
 
     // sum the losses: from losses_ to avg_loss
-    mshadow::nansum(avg_loss_data, Ldata);
+      
     // math::Sum<float, CUDAContext>(
     //     losses_.size(), losses_.data<float>(), avg_loss_data, &context_);
     // math::Scale<float, CUDAContext>(
@@ -246,14 +243,13 @@ namespace cuda {
     inline void SoftmaxFocalLossForward(const Tensor<gpu, 4, DType> &X, // Logits; data
                                         const Tensor<gpu, 4, DType> &T, // Labels; labels
                                         const Tensor<gpu, 1, DType> &wp, // num of forground ; normalizer
-                                        const Tensor<gpu, 1, DType> &avg_loss, // average loss as output; loss
+                                        const Tensor<gpu, 4, DType> &loss, // aux losses_ Tensor
                                         const Tensor<gpu, 4, DType> &P, //softmax probability, going to be re-used in gradient; prob
-                                        const Tensor<gpu, 4, DType> &losses_, // aux losses_ Tensor
                                         const int num_classes_,
                                         const float gamma_,
                                         const float alpha_)
     {
-        cuda::SoftmaxFocalLossForward(X, T, wp, avg_loss, P, losses_, num_classes_, gamma_, alpha_);
+        cuda::SoftmaxFocalLossForward(X, T, wp, loss, P, num_classes_, gamma_, alpha_);
     };
 
     template<typename DType>

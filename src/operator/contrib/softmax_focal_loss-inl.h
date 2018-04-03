@@ -47,8 +47,7 @@ enum SoftmaxFocalLossOpOutputs
 };
 enum SoftmaxFocalLossOpAuxiliary
 {
-  kLosses_,
-  kBuff_
+  kBuff
 }; // mimicking protected losses_ buff_, need shapecheck
 } // namespace focalloss
 
@@ -83,6 +82,7 @@ public:
                        const std::vector<TBlob> &aux_args)
   {
     using namespace mshadow;
+    std::cout<<"forward.h";
     CHECK_EQ(in_data.size(), 3);
     CHECK_EQ(out_data.size(), 2);
 
@@ -92,14 +92,14 @@ public:
     Tensor<xpu, 4, DType> data = in_data[focalloss::kData].get<xpu, 4, DType>(s);
     Tensor<xpu, 4, DType> label = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
     Tensor<xpu, 1, DType> normalizer = in_data[focalloss::kNorm].get<xpu, 1, DType>(s);
-    Tensor<xpu, 1, DType> loss = out_data[focalloss::kLoss].get<xpu, 1, DType>(s);
+    Tensor<xpu, 4, DType> loss = out_data[focalloss::kLoss].get<xpu, 4, DType>(s);
     Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> losses_ = aux_args[focalloss::kLosses_].get<xpu, 4, DType>(s);
+  
     CHECK_EQ(data.CheckContiguous(), true);
     CHECK_EQ(label.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    SoftmaxFocalLossForward(data, label, normalizer, loss, prob, losses_, param_.num_classes, param_.gamma, param_.alpha);
+    SoftmaxFocalLossForward(data, label, normalizer, loss, prob, param_.num_classes, param_.gamma, param_.alpha);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -125,7 +125,7 @@ public:
     Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
     Tensor<xpu, 4, DType> grad_in = in_grad[focalloss::kData].get<xpu, 4, DType>(s);
     Tensor<xpu, 4, DType> grad_out = out_grad[focalloss::kLoss].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> buff_ = aux_args[focalloss::kBuff_].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> buff_ = aux_args[focalloss::kBuff].get<xpu, 4, DType>(s);
 
     CHECK_EQ(data.CheckContiguous(), true);
     CHECK_EQ(label.CheckContiguous(), true);
@@ -181,6 +181,7 @@ public:
                   std::vector<TShape> *aux_shape) const override
   {
     using namespace mshadow;
+    std::cout<<"infershape";
     CHECK_EQ(in_shape->size(), 3U) << "Input:[data, label, normalizer]";
 
     // data: (N, C, H, W) C = num_anchors * num_class
@@ -196,14 +197,12 @@ public:
     CHECK_EQ(nshape.ndim(), 1U) << "Normalizer should be scalar";
 
     out_shape->clear();
-    // loss: scalar
-    out_shape->push_back(Shape1(nshape[0]));
+    // loss: (N, num_anchors, H, W)
+    out_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
     // prob: (N, C, H, W)
     out_shape->push_back(Shape4(dshape[0], dshape[1], dshape[2], dshape[3]));
 
     aux_shape->clear();
-    // losses_: (N, num_anchors, H, W)
-    aux_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
     // buff_: (N, num_anchors, H, W)
     aux_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
     return true;
