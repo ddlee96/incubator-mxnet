@@ -45,10 +45,8 @@ enum SoftmaxFocalLossOpOutputs
   kLoss,
   kProb
 };
-enum SoftmaxFocalLossOpAuxiliary
-{
-  kBuff
-}; // mimicking protected losses_ buff_, need shapecheck
+enum SoftmaxFocalLossOpResource 
+{ kTempSpace }; // mimicking protected losses_ buff_, need shapecheck
 } // namespace focalloss
 
 struct SoftmaxFocalLossParam : public dmlc::Parameter<SoftmaxFocalLossParam>
@@ -82,7 +80,6 @@ public:
                        const std::vector<TBlob> &aux_args)
   {
     using namespace mshadow;
-    std::cout<<"forward.h";
     CHECK_EQ(in_data.size(), 3);
     CHECK_EQ(out_data.size(), 2);
 
@@ -111,8 +108,8 @@ public:
                         const std::vector<TBlob> &aux_args)
   {
     using namespace mshadow;
-    CHECK_EQ(in_data.size(), 5);
-    CHECK_EQ(out_data.size(), 1);
+    CHECK_EQ(in_data.size(), 3);
+    CHECK_EQ(out_data.size(), 2);
 
     // TODO: shape check
 
@@ -123,9 +120,14 @@ public:
     Tensor<xpu, 4, DType> label = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
     Tensor<xpu, 1, DType> normalizer = in_data[focalloss::kNorm].get<xpu, 1, DType>(s);
     Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> grad_in = in_grad[focalloss::kData].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> grad_out = out_grad[focalloss::kLoss].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> buff_ = aux_args[focalloss::kBuff].get<xpu, 4, DType>(s);
+    Tensor<xpu, 4, DType> grad_in = in_grad[focalloss::kData].get<xpu, 4, DType>(s); //dX
+    Tensor<xpu, 4, DType> grad_out = out_grad[focalloss::kLoss].get<xpu, 4, DType>(s); //dloss
+    //Tensor<xpu, 4, DType> buff_ = aux_states[focalloss::kBuff].get<xpu, 4, DType>(s);
+
+    Tensor<xpu, 4, DType> buff_ = ctx.requested[focalloss::kTempSpace]
+      .get_space_typed<xpu, 4, DType>(label.shape_, s);
+    
+    buff_ = -1.0f;
 
     CHECK_EQ(data.CheckContiguous(), true);
     CHECK_EQ(label.CheckContiguous(), true);
@@ -181,7 +183,6 @@ public:
                   std::vector<TShape> *aux_shape) const override
   {
     using namespace mshadow;
-    std::cout<<"infershape";
     CHECK_EQ(in_shape->size(), 3U) << "Input:[data, label, normalizer]";
 
     // data: (N, C, H, W) C = num_anchors * num_class
@@ -202,9 +203,9 @@ public:
     // prob: (N, C, H, W)
     out_shape->push_back(Shape4(dshape[0], dshape[1], dshape[2], dshape[3]));
 
-    aux_shape->clear();
-    // buff_: (N, num_anchors, H, W)
-    aux_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
+    // aux_shape->clear();
+    // // buff_: (N, num_anchors, H, W)
+    // aux_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
     return true;
   }
 
@@ -246,6 +247,11 @@ public:
       const std::vector<int> &out_data) const override
   {
     return {out_grad[focalloss::kLoss], out_data[focalloss::kProb], in_data[focalloss::kData], in_data[focalloss::kLabel], };
+  }
+
+  std::vector<ResourceRequest> BackwardResource(
+      const std::vector<TShape> &in_shape) const override {
+    return {ResourceRequest::kTempSpace};
   }
 
   Operator *CreateOperator(Context ctx) const override

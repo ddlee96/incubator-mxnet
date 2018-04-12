@@ -26,8 +26,8 @@ namespace mshadow {
                                           const Tensor<cpu, 4, DType> &T, // Labels; labels
                                           const Tensor<cpu, 1, DType> &wp, // num of forground ; normalizer
                                           const Tensor<cpu, 4, DType> &P, //softmax probability; prob
-                                          const Tensor<cpu, 4, DType> &d_avg_loss, // gradient in
-                                          const Tensor<cpu, 4, DType> &dX, // gradient out
+                                          const Tensor<cpu, 4, DType> &dX, // gradient in
+                                          const Tensor<cpu, 4, DType> &dloss, // gradient out
                                           const Tensor<cpu, 4, DType> &buff_, // aux buff_ Tensor
                                           const int num_classes_,
                                           const float gamma_,
