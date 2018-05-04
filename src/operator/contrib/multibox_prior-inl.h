@@ -185,7 +185,7 @@ class MultiBoxPriorProp: public OperatorProperty {
     int num_sizes = param_.sizes.ndim();
     int num_ratios = param_.ratios.ndim();
     oshape[0] = 1;
-    oshape[1] = in_height * in_width * (num_sizes + num_ratios - 1);
+    oshape[1] = in_height * in_width * (num_sizes * num_ratios );
     oshape[2] = 4;
     out_shape->clear();
     out_shape->push_back(oshape);
