@@ -33,7 +33,7 @@ struct safe_divide {
 
 namespace AssignAnchor_enum {
 enum AssignAnchorOpInputs {kAnchor, kLabel};
-enum AssignAnchorOpOutputs {kAnchorFlag, kBestMatch, kGTFlag, kMatch};
+enum AssignAnchorOpOutputs {kAnchorFlag, kBestMatch, kGTCount, kMatch};
 enum AssignAnchorOpResource {kTempSpace};
 }  // namespace AssignAnchor_enum
 
@@ -72,7 +72,7 @@ class AssignAnchorOp : public Operator {
       .get<xpu, 2, DType>(s);
     Tensor<xpu, 2, DType> best_match = out_data[AssignAnchor_enum::kBestMatch]
       .get<xpu, 2, DType>(s);
-    Tensor<xpu, 2, DType> gt_flags = out_data[AssignAnchor_enum::kGTFlag]
+    Tensor<xpu, 2, DType> gt_count = out_data[AssignAnchor_enum::kGTCount]
       .get<xpu, 2, DType>(s);
     Tensor<xpu, 2, DType> match = out_data[AssignAnchor_enum::kMatch]
       .get<xpu, 2, DType>(s);
@@ -88,14 +88,14 @@ class AssignAnchorOp : public Operator {
 
     anchor_flag = -1.f;
     best_match = -1.0f;
-    gt_flags = -2.f;
+    gt_count = -1.f;
     temp_space = -1.0f;
     match = -1.f;
     CHECK_EQ(anchors.CheckContiguous(), true);
     CHECK_EQ(labels.CheckContiguous(), true);
     CHECK_EQ(anchor_flag.CheckContiguous(), true);
     CHECK_EQ(best_match.CheckContiguous(), true);
-    CHECK_EQ(gt_flags.CheckContiguous(), true);
+    CHECK_EQ(gt_count.CheckContiguous(), true);
     CHECK_EQ(temp_space.CheckContiguous(), true);
     CHECK_EQ(match.CheckContiguous(), true);
 
@@ -129,7 +129,7 @@ class AssignAnchorOp : public Operator {
       - temp_space[9];
     temp_space[0] = F<safe_divide>(temp_space[9], temp_space[10]);
 
-    AssignAnchorForward(anchor_flag, best_match, gt_flags, match,
+    AssignAnchorForward(anchor_flag, best_match, gt_count, match,
                           anchors, labels, temp_space,
                           param_.overlap_threshold);
   }
@@ -159,7 +159,7 @@ class AssignAnchorProp : public OperatorProperty {
   }
 
   std::vector<std::string> ListOutputs() const override {
-    return {"anchor_flag", "best_match", "gt_flags", "match"};
+    return {"anchor_flag", "best_match", "gt_count", "match"};
   }
 
   void Init(const std::vector<std::pair<std::string, std::string> >& kwargs) override {

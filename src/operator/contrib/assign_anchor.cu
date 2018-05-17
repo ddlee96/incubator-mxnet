@@ -26,18 +26,19 @@ __global__ void InitGroundTruthFlags(DType *gt_flags, const DType *labels,
   int b = index / num_labels;
   int l = index % num_labels;
   if (*(labels + b * num_labels * label_width + l * label_width) == -1.f) {
-    *(gt_flags + b * num_labels + l) = -2.f; // dummy gt
+    *(gt_flags + b * num_labels + l) = 0; // dummy gt
   } else {
-    *(gt_flags + b * num_labels + l) = -1.f; // need to be matched
+    *(gt_flags + b * num_labels + l) = 1; // need to be matched
   }
 }
 
 template<typename DType>
-__global__ void FindBestMatches(DType *best_matches, DType *gt_flags,
+__global__ void FindBestMatches(DType *best_matches, DType *gt_flags, DType *gt_count,
                                 DType *anchor_flags, const DType *overlaps,
                                 const int num_anchors, const int num_labels) {
   int nbatch = blockIdx.x;
   gt_flags += nbatch * num_labels;
+  gt_count += nbatch * num_labels;
   overlaps += nbatch * num_anchors * num_labels;
   best_matches += nbatch * num_anchors;
   anchor_flags += nbatch * num_anchors;
@@ -50,7 +51,7 @@ __global__ void FindBestMatches(DType *best_matches, DType *gt_flags,
     // check if all done.
     bool finished = true;
     for (int i = 0; i < num_labels; ++i) {
-      if (gt_flags[i] == -1.f) {
+      if (gt_flags[i] > .5) {
         finished = false;
         break;
       }
@@ -60,11 +61,11 @@ __global__ void FindBestMatches(DType *best_matches, DType *gt_flags,
     // finding max indices in different threads
     int max_x = -1;
     int max_y = -1;
-    DType max_value = -1.0;  // start with very small overlap
+    DType max_value = 1e-6;  // start with very small overlap
     for (int i = threadIdx.x; i < num_anchors; i += num_threads) {
       if (anchor_flags[i] > .5) continue;
       for (int j = 0; j < num_labels; ++j) {
-        if (gt_flags[j] == -1.f) {
+        if (gt_flags[j] > .5) {
           DType temp = overlaps[i * num_labels + j];
           if (temp > max_value) {
             max_x = j;
@@ -97,14 +98,15 @@ __global__ void FindBestMatches(DType *best_matches, DType *gt_flags,
         best_matches[max_y] = max_value;
         // mark flags as visited
         // best match 
-        // gt_flag: -1 + 1 = 0
+        // gt_count: -1 -> 0
         // anchor_flag: -1 -> 1
-        gt_flags[max_x] += 1.f;
+        gt_flags[max_x] = 0.f;
+        gt_count[max_x] = 0.f;
         anchor_flags[max_y] = 1.f;
       } else {
         // no more good matches
         for (int i = 0; i < num_labels; ++i) {
-          gt_flags[i] = -2.f;
+          gt_flags[i] = 0.f;
         }
       }
     }
@@ -128,7 +130,7 @@ __global__ void FindGoodMatches(DType *best_matches, DType *anchor_flags,
   for (int i = threadIdx.x; i < num_anchors; i += num_threads) {
     if (anchor_flags[i] < 0) {
       int idx = -1;
-      float max_value = 1e-6;
+      float max_value = -1.f;
       for (int j = 0; j < num_labels; ++j) {
         DType temp = overlaps[i * num_labels + j];
         if (temp > max_value) {
@@ -149,19 +151,19 @@ __global__ void FindGoodMatches(DType *best_matches, DType *anchor_flags,
 }
 
 template<typename DType>
-__global__ void CollectGoodMatches(DType *gt_flags,
+__global__ void CollectGoodMatches(DType *gt_count,
                                     const DType *match, 
                                     const int num_anchors,
                                     const int num_labels){
   int nbatch = blockIdx.x;
-  gt_flags += nbatch * num_labels;
+  gt_count += nbatch * num_labels;
   match += nbatch * num_anchors;
   int idx = -1;
   for (int i = 0; i < num_anchors; i++){
     idx = int(match[i]);
     if (idx > -1){
       // accummulate each good match on that gt
-      gt_flags[idx] += 1;
+      gt_count[idx] += 1.f;
     }
   }
 }
@@ -173,7 +175,7 @@ __global__ void CollectGoodMatches(DType *gt_flags,
 template<typename DType>
 inline void AssignAnchorForward(const Tensor<gpu, 2, DType> &anchor_flags_,
                            const Tensor<gpu, 2, DType> &best_matches_,
-                           const Tensor<gpu, 2, DType> &gt_flags_,
+                           const Tensor<gpu, 2, DType> &gt_count_,
                            const Tensor<gpu, 2, DType> &match_,
                            const Tensor<gpu, 2, DType> &anchors,
                            const Tensor<gpu, 3, DType> &labels,
@@ -187,9 +189,13 @@ inline void AssignAnchorForward(const Tensor<gpu, 2, DType> &anchor_flags_,
   CHECK_GT(num_labels, 2);
   CHECK_GE(num_anchors, 1);
 
-  DType *gt_flags = gt_flags_.dptr_;
+  temp_space[1] = -1.f;
+  DType *gt_flags = temp_space[1].dptr_;
+  DType *gt_count = gt_count_.dptr_;
   DType *anchor_flags = anchor_flags_.dptr_;
   DType *best_matches = best_matches_.dptr_;
+  DType *match = match_.dptr_;
+
   // init ground-truth flags, by checking valid labels
   const int num_threads = cuda::kMaxThreadsPerBlock;
   dim3 init_thread_dim(num_threads);
@@ -203,11 +209,11 @@ inline void AssignAnchorForward(const Tensor<gpu, 2, DType> &anchor_flags_,
   const DType *overlaps = temp_space[0].dptr_;
   cuda::CheckLaunchParam(num_batches, num_threads, "AssignAnchor Matching");
   cuda::FindBestMatches<DType><<<num_batches, num_threads>>>(best_matches,
-    gt_flags, anchor_flags, overlaps, num_anchors, num_labels);
+    gt_flags, gt_count, anchor_flags, overlaps, num_anchors, num_labels);
   ASSIGN_ANCHOR_CUDA_CHECK(cudaPeekAtLastError());
 
-  DType *match = match_.dptr_;
   // find good matches with overlap > threshold
+  cuda::CheckLaunchParam(num_batches, num_threads, "AssignAnchor FindGood");
   cuda::FindGoodMatches<DType><<<num_batches, num_threads>>>(best_matches,
     anchor_flags, match, overlaps, num_anchors, num_labels,
     overlap_threshold);
@@ -215,7 +221,7 @@ inline void AssignAnchorForward(const Tensor<gpu, 2, DType> &anchor_flags_,
 
 
   cuda::CheckLaunchParam(num_batches, 1, "AssignAnchor Collect");
-  cuda::CollectGoodMatches<DType><<<num_batches, 1>>>(gt_flags, match, num_anchors, num_labels);
+  cuda::CollectGoodMatches<DType><<<num_batches, 1>>>(gt_count, match, num_anchors, num_labels);
   ASSIGN_ANCHOR_CUDA_CHECK(cudaPeekAtLastError());
 }
 }  // namespace mshadow
