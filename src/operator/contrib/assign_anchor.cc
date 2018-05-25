@@ -13,7 +13,7 @@ template<typename DType>
 inline void AssignAnchorForward(const Tensor<cpu, 2, DType> &anchor_flags_,
                            const Tensor<cpu, 2, DType> &best_matches_,
                            const Tensor<cpu, 2, DType> &gt_count_,
-                           const Tensor<cpu, 2, DType> &match_,
+                           const Tensor<cpu, 2, DType> &anchor_cls_,
                            const Tensor<cpu, 2, DType> &anchors,
                            const Tensor<cpu, 3, DType> &labels,
                            const Tensor<cpu, 4, DType> &temp_space,
@@ -49,7 +49,7 @@ Output:
 Anchor_flags: nbatch * num_anchors, 0.9: good match, 1: best match, -1: no match
 Best_matchs: nbatch * num_anchors, best IOU of every anchor
 GT_count: nbatch * num_labels, 0: gt, with a best, >0: gt, with many good matches, -1: dummy(-1) gt
-Match: nbatch * num_anchors, matched gt idx os every anchor
+Anchor_cls: nbatch * num_anchors, matched gt class of every anchor
 )code" ADD_FILELINE)
 .add_argument("anchor", "NDArray-or-Symbol", "Generated anchor boxes.")
 .add_argument("label", "NDArray-or-Symbol", "Object detection labels.")

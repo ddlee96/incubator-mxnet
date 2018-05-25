@@ -33,7 +33,7 @@ struct safe_divide {
 
 namespace AssignAnchor_enum {
 enum AssignAnchorOpInputs {kAnchor, kLabel};
-enum AssignAnchorOpOutputs {kAnchorFlag, kBestMatch, kGTCount, kMatch};
+enum AssignAnchorOpOutputs {kAnchorFlag, kBestMatch, kGTCount, kAnchorCls};
 enum AssignAnchorOpResource {kTempSpace};
 }  // namespace AssignAnchor_enum
 
@@ -74,7 +74,7 @@ class AssignAnchorOp : public Operator {
       .get<xpu, 2, DType>(s);
     Tensor<xpu, 2, DType> gt_count = out_data[AssignAnchor_enum::kGTCount]
       .get<xpu, 2, DType>(s);
-    Tensor<xpu, 2, DType> match = out_data[AssignAnchor_enum::kMatch]
+    Tensor<xpu, 2, DType> anchor_cls = out_data[AssignAnchor_enum::kAnchorCls]
       .get<xpu, 2, DType>(s);
 
     index_t num_batches = labels.size(0);
@@ -90,14 +90,14 @@ class AssignAnchorOp : public Operator {
     best_match = -1.0f;
     gt_count = -1.f;
     temp_space = -1.0f;
-    match = -1.f;
+    anchor_cls = -1.f;
     CHECK_EQ(anchors.CheckContiguous(), true);
     CHECK_EQ(labels.CheckContiguous(), true);
     CHECK_EQ(anchor_flag.CheckContiguous(), true);
     CHECK_EQ(best_match.CheckContiguous(), true);
     CHECK_EQ(gt_count.CheckContiguous(), true);
     CHECK_EQ(temp_space.CheckContiguous(), true);
-    CHECK_EQ(match.CheckContiguous(), true);
+    CHECK_EQ(anchor_cls.CheckContiguous(), true);
 
     // compute overlaps
     // TODO(zhreshold): squeeze temporary memory space
@@ -129,7 +129,7 @@ class AssignAnchorOp : public Operator {
       - temp_space[9];
     temp_space[0] = F<safe_divide>(temp_space[9], temp_space[10]);
 
-    AssignAnchorForward(anchor_flag, best_match, gt_count, match,
+    AssignAnchorForward(anchor_flag, best_match, gt_count, anchor_cls,
                           anchors, labels, temp_space,
                           param_.overlap_threshold);
   }
@@ -159,7 +159,7 @@ class AssignAnchorProp : public OperatorProperty {
   }
 
   std::vector<std::string> ListOutputs() const override {
-    return {"anchor_flag", "best_match", "gt_count", "match"};
+    return {"anchor_flag", "best_match", "gt_count", "anchor_cls"};
   }
 
   void Init(const std::vector<std::pair<std::string, std::string> >& kwargs) override {
@@ -188,12 +188,12 @@ class AssignAnchorProp : public OperatorProperty {
     TShape anchor_flag_shape = Shape2(lshape[0], ashape[1]);
     TShape gt_flag_shape = Shape2(lshape[0], lshape[1]);
     TShape best_match_shape = Shape2(lshape[0], ashape[1]);
-    TShape match_shape = Shape2(lshape[0], ashape[1]);
+    TShape anchor_cls_shape = Shape2(lshape[0], ashape[1]);
     out_shape->clear();
     out_shape->push_back(anchor_flag_shape);
     out_shape->push_back(best_match_shape);
     out_shape->push_back(gt_flag_shape);
-    out_shape->push_back(match_shape);
+    out_shape->push_back(anchor_cls_shape);
     return true;
   }
 
