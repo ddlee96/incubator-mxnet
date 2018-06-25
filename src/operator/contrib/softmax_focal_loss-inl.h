@@ -34,33 +34,26 @@ namespace op
 
 namespace focalloss
 {
-enum SoftmaxFocalLossOpInputs
-{
-  kData,
-  kLabel,
-  kNorm
-};
-enum SoftmaxFocalLossOpOutputs
-{
-  kLoss,
-  kProb
-};
-enum SoftmaxFocalLossOpResource 
-{ kTempSpace }; // mimicking protected losses_ buff_, need shapecheck
+enum SoftmaxFocalLossOpInputs{kData, kLabel};
+enum SoftmaxFocalLossOpOutputs{kLoss, kProb};
+enum SoftmaxFocalLossOpResource{kTempSpace}; //
 } // namespace focalloss
 
 struct SoftmaxFocalLossParam : public dmlc::Parameter<SoftmaxFocalLossParam>
 {
+  float ignore_label;
   float grad_scale;
   float alpha;
   float gamma;
   int num_classes;
   DMLC_DECLARE_PARAMETER(SoftmaxFocalLossParam)
   {
+    DMLC_DECLARE_FIELD(ignore_label).set_default(-1.0f)
+    .describe("The instances whose `labels` == `ignore_label` will be ignored "
+              "during backward, if `use_ignore` is set to ``true``).");
     DMLC_DECLARE_FIELD(grad_scale).set_default(1.0f).describe("(float) default 1.0; multiply the loss by this scale factor.");
     DMLC_DECLARE_FIELD(alpha).set_default(0.25f).describe("(float) default 0.25; Focal Loss's alpha hyper-parameter.");
     DMLC_DECLARE_FIELD(gamma).set_default(1.0f).describe("(float) default 1.0; Focal Loss's gamma hyper-parameter.");
-    DMLC_DECLARE_FIELD(num_classes).set_default(81).describe("(int) default 81; number of classes in each softmax group.");
   }
 };
 
@@ -80,23 +73,36 @@ public:
                        const std::vector<TBlob> &aux_args)
   {
     using namespace mshadow;
-    CHECK_EQ(in_data.size(), 3);
+    CHECK_EQ(in_data.size(), 2);
     CHECK_EQ(out_data.size(), 2);
 
-    //TODO: shape check
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
-    Tensor<xpu, 4, DType> data = in_data[focalloss::kData].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> label = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
-    Tensor<xpu, 1, DType> normalizer = in_data[focalloss::kNorm].get<xpu, 1, DType>(s);
-    Tensor<xpu, 4, DType> loss = out_data[focalloss::kLoss].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
+    Tensor<xpu, 3, DType> data = in_data[focalloss::kData].get<xpu, 3, DType>(s);
+    Tensor<xpu, 2, DType> label = in_data[focalloss::kLabel].get<xpu, 2, DType>(s);
+    Tensor<xpu, 2, DType> loss = out_data[focalloss::kLoss].get<xpu, 2, DType>(s);
+    Tensor<xpu, 3, DType> prob = out_data[focalloss::kProb].get<xpu, 3, DType>(s);
   
     CHECK_EQ(data.CheckContiguous(), true);
     CHECK_EQ(label.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    SoftmaxFocalLossForward(data, label, normalizer, loss, prob, param_.num_classes, param_.gamma, param_.alpha);
+    int valid_cnt = 1;
+
+    // index_t valid_cnt = label.shape_.Size();
+    // int i_label = static_cast<int>(param_.ignore_label);
+    // Tensor<xpu, 1, DType> workspace =
+    //   ctx.requested[focalloss::kTempSpace].get_host_space_typed<1, DType>(
+    //   label.shape_);
+    // Copy(workspace, label, label.stream_);
+    // for (index_t i = 0; i < label.size(0); ++i) {
+    //   if (static_cast<int>(workspace[i]) == i_label) {
+    //     valid_cnt--;
+    //   }
+    // }
+    // valid_cnt = valid_cnt == 0 ? 1 : valid_cnt;
+
+    SoftmaxFocalLossForward(data, label, loss, prob, valid_cnt, param_.gamma, param_.alpha);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -108,24 +114,20 @@ public:
                         const std::vector<TBlob> &aux_args)
   {
     using namespace mshadow;
-    CHECK_EQ(in_data.size(), 3);
+    CHECK_EQ(in_data.size(), 2);
     CHECK_EQ(out_data.size(), 2);
-
-    // TODO: shape check
 
     Stream<xpu> *s = ctx.get_stream<xpu>();
 
 
-    Tensor<xpu, 4, DType> data = in_data[focalloss::kData].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> label = in_data[focalloss::kLabel].get<xpu, 4, DType>(s);
-    Tensor<xpu, 1, DType> normalizer = in_data[focalloss::kNorm].get<xpu, 1, DType>(s);
-    Tensor<xpu, 4, DType> prob = out_data[focalloss::kProb].get<xpu, 4, DType>(s);
-    Tensor<xpu, 4, DType> grad_in = in_grad[focalloss::kData].get<xpu, 4, DType>(s); //dX
-    Tensor<xpu, 4, DType> grad_out = out_grad[focalloss::kLoss].get<xpu, 4, DType>(s); //dloss
-    //Tensor<xpu, 4, DType> buff_ = aux_states[focalloss::kBuff].get<xpu, 4, DType>(s);
+    Tensor<xpu, 3, DType> data = in_data[focalloss::kData].get<xpu, 3, DType>(s);
+    Tensor<xpu, 2, DType> label = in_data[focalloss::kLabel].get<xpu, 2, DType>(s);
+    Tensor<xpu, 3, DType> prob = out_data[focalloss::kProb].get<xpu, 3, DType>(s);
+    Tensor<xpu, 3, DType> grad_in = in_grad[focalloss::kData].get<xpu, 3, DType>(s); //dX
+    Tensor<xpu, 2, DType> grad_out = out_grad[focalloss::kLoss].get<xpu, 2, DType>(s); //dloss
 
-    Tensor<xpu, 4, DType> buff_ = ctx.requested[focalloss::kTempSpace]
-      .get_space_typed<xpu, 4, DType>(label.shape_, s);
+    Tensor<xpu, 2, DType> buff_ = ctx.requested[focalloss::kTempSpace]
+      .get_space_typed<xpu, 2, DType>(label.shape_, s);
     
     buff_ = -1.0f;
 
@@ -133,7 +135,21 @@ public:
     CHECK_EQ(label.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    SoftmaxFocalLossBackwardAcc(data, label, normalizer, prob, grad_in, grad_out, buff_, param_.num_classes, param_.gamma, param_.alpha);
+    int valid_cnt = 1;
+    // index_t valid_cnt = label.shape_.Size();
+    // int i_label = static_cast<int>(param_.ignore_label);
+    // Tensor<xpu, 1, DType> workspace =
+    //   ctx.requested[focalloss::kTempSpace].get_host_space_typed<1, DType>(
+    //   label.shape_);
+    // Copy(workspace, label, label.stream_);
+    // for (index_t i = 0; i < label.size(0); ++i) {
+    //   if (static_cast<int>(workspace[i]) == i_label) {
+    //     valid_cnt--;
+    //   }
+    // }
+    // valid_cnt = valid_cnt == 0 ? 1 : valid_cnt;
+
+    SoftmaxFocalLossBackwardAcc(data, label, prob, grad_in, grad_out, buff_, valid_cnt, param_.gamma, param_.alpha);
   }
 
 private:
@@ -150,7 +166,7 @@ class SoftmaxFocalLossProp : public OperatorProperty
 public:
   std::vector<std::string> ListArguments() const override
   {
-    return {"data", "label", "normalizer"};
+    return {"data", "label"};
   }
 
   std::vector<std::string> ListOutputs() const override
@@ -183,29 +199,22 @@ public:
                   std::vector<TShape> *aux_shape) const override
   {
     using namespace mshadow;
-    CHECK_EQ(in_shape->size(), 3U) << "Input:[data, label, normalizer]";
+    CHECK_EQ(in_shape->size(), 2U) << "Input:[data, label]";
 
-    // data: (N, C, H, W) C = num_anchors * num_class
+    // data: (N, C, A) C =  num_class
     TShape dshape = in_shape->at(focalloss::kData);
-    CHECK_EQ(dshape.ndim(), 4U) << "data should be a 4D tensor";
+    CHECK_EQ(dshape.ndim(), 3U) << "data should be a 3D tensor";
 
-    // label: (N, num_anchors, H, W)
+    // label: (N, A)
     TShape lshape = in_shape->at(focalloss::kLabel);
-    CHECK_EQ(lshape.ndim(), 4U) << "label should be a 4D tensor";
-
-    // normalizer: scalar
-    TShape nshape = in_shape->at(focalloss::kNorm);
-    CHECK_EQ(nshape.ndim(), 1U) << "Normalizer should be scalar";
+    CHECK_EQ(lshape.ndim(), 3U) << "label should be a 3D tensor";
 
     out_shape->clear();
-    // loss: (N, num_anchors, H, W)
-    out_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
-    // prob: (N, C, H, W)
-    out_shape->push_back(Shape4(dshape[0], dshape[1], dshape[2], dshape[3]));
+    // loss: (N, A)
+    out_shape->push_back(Shape2(dshape[0], dshape[2]));
+    // prob: (N, C, A)
+    out_shape->push_back(Shape3(dshape[0], dshape[1], dshape[2]));
 
-    // aux_shape->clear();
-    // // buff_: (N, num_anchors, H, W)
-    // aux_shape->push_back(Shape4(dshape[0], lshape[1], dshape[2], dshape[3]));
     return true;
   }
 
@@ -246,7 +255,7 @@ public:
       const std::vector<int> &in_data,
       const std::vector<int> &out_data) const override
   {
-    return {out_grad[focalloss::kLoss], out_data[focalloss::kProb], in_data[focalloss::kData], in_data[focalloss::kLabel], };
+    return {out_grad[focalloss::kLoss], out_data[focalloss::kProb], in_data[focalloss::kData], in_data[focalloss::kLabel]};
   }
 
   std::vector<ResourceRequest> BackwardResource(

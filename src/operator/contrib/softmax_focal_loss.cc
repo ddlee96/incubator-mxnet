@@ -8,30 +8,28 @@
 
 namespace mshadow {
   template<typename DType>
-  inline void SoftmaxFocalLossForward(const Tensor<cpu, 4, DType> &X, // Logits; data
-                                      const Tensor<cpu, 4, DType> &T, // Labels; labels
-                                      const Tensor<cpu, 1, DType> &wp, // num of forground ; normalizer
-                                      const Tensor<cpu, 4, DType> &loss, // output loss
-                                      const Tensor<cpu, 4, DType> &P, //softmax probability, going to be re-used in gradient; prob
-                                      const int num_classes_,
-                                      const float gamma_,
-                                      const float alpha_)
+    inline void SoftmaxFocalLossForward(const Tensor<cpu, 3, DType> &X, // Logits; data
+                                        const Tensor<cpu, 2, DType> &T, // Labels; labels
+                                        const Tensor<cpu, 2, DType> &loss, // aux losses_ Tensor
+                                        const Tensor<cpu, 3, DType> &P, //softmax probability, going to be re-used in gradient; prob
+                                        const int valid_cnt_,
+                                        const float gamma_,
+                                        const float alpha_)
   {
       // not implemented
       return;
   };
 
   template<typename DType>
-  inline void SoftmaxFocalLossBackwardAcc(const Tensor<cpu, 4, DType> &X, // Logits; data
-                                          const Tensor<cpu, 4, DType> &T, // Labels; labels
-                                          const Tensor<cpu, 1, DType> &wp, // num of forground ; normalizer
-                                          const Tensor<cpu, 4, DType> &P, //softmax probability; prob
-                                          const Tensor<cpu, 4, DType> &dX, // gradient in
-                                          const Tensor<cpu, 4, DType> &dloss, // gradient out
-                                          const Tensor<cpu, 4, DType> &buff_, // aux buff_ Tensor
-                                          const int num_classes_,
-                                          const float gamma_,
-                                          const float alpha_)
+    inline void SoftmaxFocalLossBackwardAcc(const Tensor<cpu, 3, DType> &X, // Logits; data
+                                            const Tensor<cpu, 2, DType> &T, // Labels; labels
+                                            const Tensor<cpu, 3, DType> &P, //softmax probability; prob
+                                            const Tensor<cpu, 3, DType> &dX, // gradient out
+                                            const Tensor<cpu, 2, DType> &dloss, // gradient in
+                                            const Tensor<cpu, 2, DType> &buff_, // aux buff_ Tensor
+                                            const int valid_cnt_,
+                                            const float gamma_,
+                                            const float alpha_)
   {
       // not implemented
       return;
@@ -74,9 +72,8 @@ s_j is the unnormalized score for class j.
 
 See: https://arxiv.org/abs/1708.02002 for details.
 )code" ADD_FILELINE)
-.add_argument("data", "NDArray-or-Symbol", "4D tensor of softmax inputs (called 'scores' or 'logits') with shape (N, C, H, W), where C = num_anchors * num_classes defines num_anchors groups of contiguous num_classes softmax inputs.")
-.add_argument("label", "NDArray-or-Symbol", "4D tensor of labels with shape (N, num_anchors, H, W). Each entry is a class label in [0, num_classes - 1] (inclusive).")
-.add_argument("normalizer", "NDArray-or-Symbol", "Scalar; the loss is normalized by 1 / max(1, normalizer).")
+.add_argument("data", "NDArray-or-Symbol", "3D tensor of softmax inputs (called 'scores' or 'logits') with shape (N, C, A), where C = num_anchors * num_classes defines num_anchors groups of contiguous num_classes softmax inputs.")
+.add_argument("label", "NDArray-or-Symbol", "2D tensor of labels with shape (N, A). Each entry is a class label in [0, num_classes - 1] (inclusive).")
 .add_arguments(SoftmaxFocalLossParam::__FIELDS__());
 
 }  // namespace op
