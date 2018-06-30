@@ -51,8 +51,7 @@ struct MultiBoxDetectionParam : public dmlc::Parameter<MultiBoxDetectionParam> {
   int background_id;
   float nms_threshold;
   bool force_suppress;
-  int keep_topk;
-  int nms_topk;
+  nnvm::Tuple<int> nms_topk;
   nnvm::Tuple<float> variances;
   DMLC_DECLARE_PARAMETER(MultiBoxDetectionParam) {
     DMLC_DECLARE_FIELD(clip).set_default(true)
@@ -67,7 +66,7 @@ struct MultiBoxDetectionParam : public dmlc::Parameter<MultiBoxDetectionParam> {
     .describe("Suppress all detections regardless of class_id.");
     DMLC_DECLARE_FIELD(variances).set_default({0.1f, 0.1f, 0.2f, 0.2f})
     .describe("Variances to be decoded from box regression output.");
-    DMLC_DECLARE_FIELD(nms_topk).set_default(-1)
+    DMLC_DECLARE_FIELD(nms_topk).set_default({200, 200, 200, 200})
     .describe("Keep maximum top k detections before nms, -1 for no limit.");
   }
 };  // struct MultiBoxDetectionParam
@@ -201,5 +200,6 @@ class MultiBoxDetectionProp : public OperatorProperty {
 
 }  // namespace op
 }  // namespace mxnet
+
 
 #endif  // MXNET_OPERATOR_CONTRIB_MULTIBOX_DETECTION_INL_H_

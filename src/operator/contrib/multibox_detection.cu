@@ -60,7 +60,7 @@ void DetectionForwardKernel(DType *out, const DType *cls_prob,
                                        const bool clip, const float vx,
                                        const float vy, const float vw,
                                        const float vh, const float nms_threshold,
-                                       const bool force_suppress, const int nms_topk) {
+                                       const bool force_suppress, const int *nms_topk) {
   const int nbatch = blockIdx.x;  // each block for each batch
   int index = threadIdx.x;
   __shared__ int valid_count;
@@ -174,16 +174,63 @@ void DetectionForwardKernel(DType *out, const DType *cls_prob,
     __syncthreads();
   }
 
-  // keep top k detections
-  int ntop = size;
-  if (nms_topk > 0 && nms_topk < ntop) {
-    ntop = nms_topk;
-    for (int i = ntop + index; i < size; i += blockDim.x) {
-      out[i * 6] = -1;
+  // keep top k detections for each cls
+
+  __shared__ int ntop;
+  __shared__ int cls_cnt[32];
+  // init cls_cnt with topk parameter
+  if (index == 0) {
+    ntop = size;
+    for (int j = 0; j < num_classes - 1; j++) {
+      cls_cnt[j] = nms_topk[j];
+      //printf("%d\n", cls_cnt[j]);
+    }
+  }
+  __syncthreads();
+  
+  // use seperate counter for each cls, record last indice with non-zero class_id as ntop
+  for (int i = index; i < size; i += blockDim.x) {
+    if (static_cast<int>(out[i*6]) < 0) continue;
+    // use atomic function instead of ++
+    atomicSub(&cls_cnt[static_cast<int>(out[i*6])], 1);
+    if (cls_cnt[static_cast<int>(out[i*6])] < 0) {
+      out[i*6] = -1;
+    }
+    // find max cls_cnt, when all counters less than zero, set ntop
+    int temp = -100000;
+    for (int j = 0; j < num_classes - 1; j++) {
+      if (cls_cnt[j] > temp) {
+        temp = cls_cnt[j];
+      }
+    }
+    if ( ntop == size && temp < 0) {
+      ntop = i;
     }
     __syncthreads();
   }
 
+  // pre NMS cls_cnt
+  if (index == 0) {
+    int cnt[32];
+    for (int j = 0; j < num_classes - 1; j++) {
+      cnt[j] = 0;
+      //printf("%d\n", cls_cnt[j]);
+    }
+    for (int i = 0; i < size; i++) {
+      if (out[i*6] > -1) cnt[static_cast<int>(out[i*6])]++;
+    }
+    for (int j = 0; j < num_classes - 1; j++) {
+      printf("%d\t", cnt[j]);
+    }
+    printf("\n");
+  }
+
+  // if (index == 0) {
+  //   for (int j = 0; j < num_classes - 1; j++) {
+  //     printf("%d\n", cls_cnt[j]);
+  //   }
+  //   printf("%d\n", ntop);
+  // }
   // apply NMS
   for (int compare_pos = 0; compare_pos < ntop; ++compare_pos) {
     DType compare_id = out[compare_pos * 6];
@@ -202,6 +249,22 @@ void DetectionForwardKernel(DType *out, const DType *cls_prob,
     }
     __syncthreads();
   }
+
+  // post NMS cls_cnt
+  if (index == 0) {
+    int cnt[32];
+    for (int j = 0; j < num_classes - 1; j++) {
+      cnt[j] = 0;
+      //printf("%d\n", cls_cnt[j]);
+    }
+    for (int i = 0; i < size; i++) {
+      if (out[i*6] > -1) cnt[static_cast<int>(out[i*6])]++;
+    }
+    for (int j = 0; j < num_classes - 1; j++) {
+      printf("%d\t", cnt[j]);
+    }
+    printf("\n");
+  }
 }
 }  // namespace cuda
 
@@ -216,21 +279,27 @@ inline void MultiBoxDetectionForward(const Tensor<gpu, 3, DType> &out,
                                      const nnvm::Tuple<float> &variances,
                                      const float nms_threshold,
                                      const bool force_suppress,
-                                     const int nms_topk) {
+                                     const nnvm::Tuple<int> &nms_topk) {
   CHECK_EQ(variances.ndim(), 4) << "Variance size must be 4";
   const int num_classes = cls_prob.size(1);
+  CHECK_EQ(nms_topk.ndim(), num_classes-1) << "nms_topk size must be num_classes";
   const int num_anchors = cls_prob.size(2);
   const int num_batches = cls_prob.size(0);
   const int num_threads = cuda::kMaxThreadsPerBlock;
   int num_blocks = num_batches;
+  // alloc memory for nms_topk on GPU and copy only data to it(extract from nnvm::Tuple class)
+  int *nms_topk_ptr;
+  MULTIBOX_DETECTION_CUDA_CHECK(cudaMalloc((void **)&nms_topk_ptr, sizeof(int) * num_classes));
+  MULTIBOX_DETECTION_CUDA_CHECK(cudaMemcpy(nms_topk_ptr, &nms_topk[0], sizeof(int) * num_classes, cudaMemcpyHostToDevice));
   cuda::CheckLaunchParam(num_blocks, num_threads, "MultiBoxDetection Forward");
   cudaStream_t stream = Stream<gpu>::GetStream(out.stream_);
   cuda::DetectionForwardKernel<<<num_blocks, num_threads, 0, stream>>>(out.dptr_,
     cls_prob.dptr_, loc_pred.dptr_, anchors.dptr_, temp_space.dptr_,
     num_classes, num_anchors, threshold, clip,
     variances[0], variances[1], variances[2], variances[3],
-    nms_threshold, force_suppress, nms_topk);
+    nms_threshold, force_suppress, nms_topk_ptr);
   MULTIBOX_DETECTION_CUDA_CHECK(cudaPeekAtLastError());
+  MULTIBOX_DETECTION_CUDA_CHECK(cudaFree(nms_topk_ptr));
 }
 }  // namespace mshadow
 

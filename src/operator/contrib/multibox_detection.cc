@@ -89,8 +89,8 @@ inline void MultiBoxDetectionForward(const Tensor<cpu, 3, DType> &out,
                                      const bool clip,
                                      const nnvm::Tuple<float> &variances,
                                      const float nms_threshold,
-                                     const bool force_suppress,
-                                     const int nms_topk) {
+                                     const bool force_suppress,                                     
+                                     const nnvm::Tuple<int> &nms_topk) {
   CHECK_EQ(variances.ndim(), 4) << "Variance size must be 4";
   const int num_classes = cls_prob.size(1);
   const int num_anchors = cls_prob.size(2);
@@ -141,8 +141,8 @@ inline void MultiBoxDetectionForward(const Tensor<cpu, 3, DType> &out,
     // re-order output
     DType *ptemp = temp_space.dptr_ + nbatch * num_anchors * 6;
     int nkeep = static_cast<int>(sorter.size());
-    if (nms_topk > 0 && nms_topk < nkeep) {
-      nkeep = nms_topk;
+    if (nms_topk[0] > 0 && nms_topk[0] < nkeep) {
+      nkeep = nms_topk[0];
     }
     for (int i = 0; i < nkeep; ++i) {
       for (int j = 0; j < 6; ++j) {
