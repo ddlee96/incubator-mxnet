@@ -47,7 +47,7 @@ enum MultiBoxDetectionOpResource {kTempSpace};
 
 struct MultiBoxDetectionParam : public dmlc::Parameter<MultiBoxDetectionParam> {
   bool clip;
-  float threshold;
+  nnvm::Tuple<float> threshold;
   int background_id;
   float nms_threshold;
   bool force_suppress;
@@ -56,7 +56,7 @@ struct MultiBoxDetectionParam : public dmlc::Parameter<MultiBoxDetectionParam> {
   DMLC_DECLARE_PARAMETER(MultiBoxDetectionParam) {
     DMLC_DECLARE_FIELD(clip).set_default(true)
     .describe("Clip out-of-boundary boxes.");
-    DMLC_DECLARE_FIELD(threshold).set_default(0.01f)
+    DMLC_DECLARE_FIELD(threshold).set_default({0.1f, 0.1f, 0.1f, 0.1f})
     .describe("Threshold to be a positive prediction.");
     DMLC_DECLARE_FIELD(background_id).set_default(0)
     .describe("Background id.");

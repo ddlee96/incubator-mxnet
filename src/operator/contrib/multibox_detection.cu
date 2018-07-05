@@ -56,7 +56,7 @@ __launch_bounds__(cuda::kMaxThreadsPerBlock)
 void DetectionForwardKernel(DType *out, const DType *cls_prob,
                                        const DType *loc_pred, const DType *anchors,
                                        DType *temp_space, const int num_classes,
-                                       const int num_anchors, const float threshold,
+                                       const int num_anchors, const float *threshold,
                                        const bool clip, const float vx,
                                        const float vy, const float vw,
                                        const float vh, const float nms_threshold,
@@ -74,52 +74,48 @@ void DetectionForwardKernel(DType *out, const DType *cls_prob,
   __syncthreads();
 
   // apply prediction to anchors
-  for (int i = index; i < num_anchors; i += blockDim.x) {
-    DType score = -1;
-    int id = 0;
+  for (int i = index; i < num_anchors; i += blockDim.x) {   
     for (int j = 1; j < num_classes; ++j) {
-      DType temp = cls_prob[j * num_anchors + i];
-      if (temp > score) {
-        score = temp;
-        id = j;
+      int id = 0;
+      DType score = cls_prob[j * num_anchors + i];
+      id = j;
+      if (id > 0 && score < threshold[j-1]) {
+        id = 0;
       }
-    }
-    if (id > 0 && score < threshold) {
-      id = 0;
-    }
-
-    if (id > 0) {
-      // valid class
-      int pos = atomicAdd(&valid_count, 1);
-      out[pos * 6] = id - 1;  // restore original class id
-      out[pos * 6 + 1] = (id == 0 ? DType(-1) : score);
-      int offset = i * 4;
-      DType al = anchors[offset];
-      DType at = anchors[offset + 1];
-      DType ar = anchors[offset + 2];
-      DType ab = anchors[offset + 3];
-      DType aw = ar - al;
-      DType ah = ab - at;
-      DType ax = (al + ar) / 2.f;
-      DType ay = (at + ab) / 2.f;
-      DType ox = loc_pred[offset] * vx * aw + ax;
-      DType oy = loc_pred[offset + 1] * vy * ah + ay;
-      DType ow = exp(loc_pred[offset + 2] * vw) * aw / 2;
-      DType oh = exp(loc_pred[offset + 3] * vh) * ah / 2;
-      DType xmin = ox - ow;
-      DType ymin = oy - oh;
-      DType xmax = ox + ow;
-      DType ymax = oy + oh;
-      if (clip) {
-        Clip(&xmin, DType(0), DType(1));
-        Clip(&ymin, DType(0), DType(1));
-        Clip(&xmax, DType(0), DType(1));
-        Clip(&ymax, DType(0), DType(1));
+  
+      if (id > 0) {
+        // valid class
+        int pos = atomicAdd(&valid_count, 1);
+        out[pos * 6] = id - 1;  // restore original class id
+        out[pos * 6 + 1] = (id == 0 ? DType(-1) : score);
+        int offset = i * 4;
+        DType al = anchors[offset];
+        DType at = anchors[offset + 1];
+        DType ar = anchors[offset + 2];
+        DType ab = anchors[offset + 3];
+        DType aw = ar - al;
+        DType ah = ab - at;
+        DType ax = (al + ar) / 2.f;
+        DType ay = (at + ab) / 2.f;
+        DType ox = loc_pred[offset] * vx * aw + ax;
+        DType oy = loc_pred[offset + 1] * vy * ah + ay;
+        DType ow = exp(loc_pred[offset + 2] * vw) * aw / 2;
+        DType oh = exp(loc_pred[offset + 3] * vh) * ah / 2;
+        DType xmin = ox - ow;
+        DType ymin = oy - oh;
+        DType xmax = ox + ow;
+        DType ymax = oy + oh;
+        if (clip) {
+          Clip(&xmin, DType(0), DType(1));
+          Clip(&ymin, DType(0), DType(1));
+          Clip(&xmax, DType(0), DType(1));
+          Clip(&ymax, DType(0), DType(1));
+        }
+        out[pos * 6 + 2] = xmin;
+        out[pos * 6 + 3] = ymin;
+        out[pos * 6 + 4] = xmax;
+        out[pos * 6 + 5] = ymax;
       }
-      out[pos * 6 + 2] = xmin;
-      out[pos * 6 + 3] = ymin;
-      out[pos * 6 + 4] = xmax;
-      out[pos * 6 + 5] = ymax;
     }
   }
   __syncthreads();
@@ -174,6 +170,22 @@ void DetectionForwardKernel(DType *out, const DType *cls_prob,
     __syncthreads();
   }
 
+  // pre TOP_K cls_cnt
+  // if (index == 0) {
+  //   int cnt[32];
+  //   for (int j = 0; j < num_classes - 1; j++) {
+  //     cnt[j] = 0;
+  //     //printf("%d\n", cls_cnt[j]);
+  //   }
+  //   for (int i = 0; i < size; i++) {
+  //     if (static_cast<int>(out[i*6]) > -1) cnt[static_cast<int>(out[i*6])]++;
+  //   }
+  //   for (int j = 0; j < num_classes - 1; j++) {
+  //     printf("%d\t", cnt[j]);
+  //   }
+  //   printf("\n");
+  // }
+
   // keep top k detections for each cls
 
   __shared__ int ntop;
@@ -183,21 +195,20 @@ void DetectionForwardKernel(DType *out, const DType *cls_prob,
     ntop = size;
     for (int j = 0; j < num_classes - 1; j++) {
       cls_cnt[j] = nms_topk[j];
-      //printf("%d\n", cls_cnt[j]);
+      // printf("%d\n", cls_cnt[j]);
     }
   }
   __syncthreads();
   
   // use seperate counter for each cls, record last indice with non-zero class_id as ntop
   for (int i = index; i < size; i += blockDim.x) {
-    if (static_cast<int>(out[i*6]) < 0) continue;
     // use atomic function instead of ++
     atomicSub(&cls_cnt[static_cast<int>(out[i*6])], 1);
     if (cls_cnt[static_cast<int>(out[i*6])] < 0) {
       out[i*6] = -1;
     }
     // find max cls_cnt, when all counters less than zero, set ntop
-    int temp = -100000;
+    int temp = -size;
     for (int j = 0; j < num_classes - 1; j++) {
       if (cls_cnt[j] > temp) {
         temp = cls_cnt[j];
@@ -206,24 +217,24 @@ void DetectionForwardKernel(DType *out, const DType *cls_prob,
     if ( ntop == size && temp < 0) {
       ntop = i;
     }
-    __syncthreads();
   }
+  __syncthreads();
 
   // pre NMS cls_cnt
-  if (index == 0) {
-    int cnt[32];
-    for (int j = 0; j < num_classes - 1; j++) {
-      cnt[j] = 0;
-      //printf("%d\n", cls_cnt[j]);
-    }
-    for (int i = 0; i < size; i++) {
-      if (out[i*6] > -1) cnt[static_cast<int>(out[i*6])]++;
-    }
-    for (int j = 0; j < num_classes - 1; j++) {
-      printf("%d\t", cnt[j]);
-    }
-    printf("\n");
-  }
+  // if (index == 0) {
+  //   int cnt[32];
+  //   for (int j = 0; j < num_classes - 1; j++) {
+  //     cnt[j] = 0;
+  //     //printf("%d\n", cls_cnt[j]);
+  //   }
+  //   for (int i = 0; i < size; i++) {
+  //     if (static_cast<int>(out[i*6]) > -1) cnt[static_cast<int>(out[i*6])]++;
+  //   }
+  //   for (int j = 0; j < num_classes - 1; j++) {
+  //     printf("%d\t", cnt[j]);
+  //   }
+  //   printf("\n");
+  // }
 
   // if (index == 0) {
   //   for (int j = 0; j < num_classes - 1; j++) {
@@ -251,20 +262,20 @@ void DetectionForwardKernel(DType *out, const DType *cls_prob,
   }
 
   // post NMS cls_cnt
-  if (index == 0) {
-    int cnt[32];
-    for (int j = 0; j < num_classes - 1; j++) {
-      cnt[j] = 0;
-      //printf("%d\n", cls_cnt[j]);
-    }
-    for (int i = 0; i < size; i++) {
-      if (out[i*6] > -1) cnt[static_cast<int>(out[i*6])]++;
-    }
-    for (int j = 0; j < num_classes - 1; j++) {
-      printf("%d\t", cnt[j]);
-    }
-    printf("\n");
-  }
+  // if (index == 0) {
+  //   int cnt[32];
+  //   for (int j = 0; j < num_classes - 1; j++) {
+  //     cnt[j] = 0;
+  //     //printf("%d\n", cls_cnt[j]);
+  //   }
+  //   for (int i = 0; i < size; i++) {
+  //     if (static_cast<int>(out[i*6]) > -1) cnt[static_cast<int>(out[i*6])]++;
+  //   }
+  //   for (int j = 0; j < num_classes - 1; j++) {
+  //     printf("%d\t", cnt[j]);
+  //   }
+  //   printf("\n");
+  // }
 }
 }  // namespace cuda
 
@@ -274,7 +285,7 @@ inline void MultiBoxDetectionForward(const Tensor<gpu, 3, DType> &out,
                                      const Tensor<gpu, 2, DType> &loc_pred,
                                      const Tensor<gpu, 2, DType> &anchors,
                                      const Tensor<gpu, 3, DType> &temp_space,
-                                     const float threshold,
+                                     const nnvm::Tuple<float> &threshold,
                                      const bool clip,
                                      const nnvm::Tuple<float> &variances,
                                      const float nms_threshold,
@@ -291,15 +302,19 @@ inline void MultiBoxDetectionForward(const Tensor<gpu, 3, DType> &out,
   int *nms_topk_ptr;
   MULTIBOX_DETECTION_CUDA_CHECK(cudaMalloc((void **)&nms_topk_ptr, sizeof(int) * num_classes));
   MULTIBOX_DETECTION_CUDA_CHECK(cudaMemcpy(nms_topk_ptr, &nms_topk[0], sizeof(int) * num_classes, cudaMemcpyHostToDevice));
+  float *score_thresh_ptr;
+  MULTIBOX_DETECTION_CUDA_CHECK(cudaMalloc((void **)&score_thresh_ptr, sizeof(float) * num_classes));
+  MULTIBOX_DETECTION_CUDA_CHECK(cudaMemcpy(score_thresh_ptr, &threshold[0], sizeof(float) * num_classes, cudaMemcpyHostToDevice));
   cuda::CheckLaunchParam(num_blocks, num_threads, "MultiBoxDetection Forward");
   cudaStream_t stream = Stream<gpu>::GetStream(out.stream_);
   cuda::DetectionForwardKernel<<<num_blocks, num_threads, 0, stream>>>(out.dptr_,
     cls_prob.dptr_, loc_pred.dptr_, anchors.dptr_, temp_space.dptr_,
-    num_classes, num_anchors, threshold, clip,
+    num_classes, num_anchors, score_thresh_ptr, clip,
     variances[0], variances[1], variances[2], variances[3],
     nms_threshold, force_suppress, nms_topk_ptr);
   MULTIBOX_DETECTION_CUDA_CHECK(cudaPeekAtLastError());
   MULTIBOX_DETECTION_CUDA_CHECK(cudaFree(nms_topk_ptr));
+  MULTIBOX_DETECTION_CUDA_CHECK(cudaFree(score_thresh_ptr));
 }
 }  // namespace mshadow
 

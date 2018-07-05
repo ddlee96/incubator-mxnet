@@ -85,7 +85,7 @@ inline void MultiBoxDetectionForward(const Tensor<cpu, 3, DType> &out,
                                      const Tensor<cpu, 2, DType> &loc_pred,
                                      const Tensor<cpu, 2, DType> &anchors,
                                      const Tensor<cpu, 3, DType> &temp_space,
-                                     const float threshold,
+                                     const nnvm::Tuple<float> &threshold,
                                      const bool clip,
                                      const nnvm::Tuple<float> &variances,
                                      const float nms_threshold,
@@ -112,7 +112,7 @@ inline void MultiBoxDetectionForward(const Tensor<cpu, 3, DType> &out,
           id = j;
         }
       }
-      if (id > 0 && score < threshold) {
+      if (id > 0 && score < threshold[0]) {
         id = 0;
       }
       if (id > 0) {
