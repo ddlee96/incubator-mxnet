@@ -12,7 +12,6 @@ namespace mshadow {
                                         const Tensor<cpu, 2, DType> &T, // Labels; labels
                                         const Tensor<cpu, 2, DType> &loss, // aux losses_ Tensor
                                         const Tensor<cpu, 3, DType> &P, //softmax probability, going to be re-used in gradient; prob
-                                        const int valid_cnt_,
                                         const float gamma_,
                                         const float alpha_)
   {
@@ -27,7 +26,6 @@ namespace mshadow {
                                             const Tensor<cpu, 3, DType> &dX, // gradient out
                                             const Tensor<cpu, 2, DType> &dloss, // gradient in
                                             const Tensor<cpu, 2, DType> &buff_, // aux buff_ Tensor
-                                            const int valid_cnt_,
                                             const float gamma_,
                                             const float alpha_)
   {
@@ -72,7 +70,7 @@ s_j is the unnormalized score for class j.
 
 See: https://arxiv.org/abs/1708.02002 for details.
 )code" ADD_FILELINE)
-.add_argument("data", "NDArray-or-Symbol", "3D tensor of softmax inputs (called 'scores' or 'logits') with shape (N, C, A), where C = num_anchors * num_classes defines num_anchors groups of contiguous num_classes softmax inputs.")
+.add_argument("data", "NDArray-or-Symbol", "3D tensor of softmax inputs (called 'scores' or 'logits') with shape (N, A, C), where C = num_anchors * num_classes defines num_anchors groups of contiguous num_classes softmax inputs.")
 .add_argument("label", "NDArray-or-Symbol", "2D tensor of labels with shape (N, A). Each entry is a class label in [0, num_classes - 1] (inclusive).")
 .add_arguments(SoftmaxFocalLossParam::__FIELDS__());
 

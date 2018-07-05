@@ -45,7 +45,6 @@ struct SoftmaxFocalLossParam : public dmlc::Parameter<SoftmaxFocalLossParam>
   float grad_scale;
   float alpha;
   float gamma;
-  int num_classes;
   DMLC_DECLARE_PARAMETER(SoftmaxFocalLossParam)
   {
     DMLC_DECLARE_FIELD(ignore_label).set_default(-1.0f)
@@ -87,22 +86,7 @@ public:
     CHECK_EQ(label.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    int valid_cnt = 1;
-
-    // index_t valid_cnt = label.shape_.Size();
-    // int i_label = static_cast<int>(param_.ignore_label);
-    // Tensor<xpu, 1, DType> workspace =
-    //   ctx.requested[focalloss::kTempSpace].get_host_space_typed<1, DType>(
-    //   label.shape_);
-    // Copy(workspace, label, label.stream_);
-    // for (index_t i = 0; i < label.size(0); ++i) {
-    //   if (static_cast<int>(workspace[i]) == i_label) {
-    //     valid_cnt--;
-    //   }
-    // }
-    // valid_cnt = valid_cnt == 0 ? 1 : valid_cnt;
-
-    SoftmaxFocalLossForward(data, label, loss, prob, valid_cnt, param_.gamma, param_.alpha);
+    SoftmaxFocalLossForward(data, label, loss, prob, param_.gamma, param_.alpha);
   }
 
   virtual void Backward(const OpContext &ctx,
@@ -135,21 +119,7 @@ public:
     CHECK_EQ(label.CheckContiguous(), true);
     CHECK_EQ(prob.CheckContiguous(), true);
 
-    int valid_cnt = 1;
-    // index_t valid_cnt = label.shape_.Size();
-    // int i_label = static_cast<int>(param_.ignore_label);
-    // Tensor<xpu, 1, DType> workspace =
-    //   ctx.requested[focalloss::kTempSpace].get_host_space_typed<1, DType>(
-    //   label.shape_);
-    // Copy(workspace, label, label.stream_);
-    // for (index_t i = 0; i < label.size(0); ++i) {
-    //   if (static_cast<int>(workspace[i]) == i_label) {
-    //     valid_cnt--;
-    //   }
-    // }
-    // valid_cnt = valid_cnt == 0 ? 1 : valid_cnt;
-
-    SoftmaxFocalLossBackwardAcc(data, label, prob, grad_in, grad_out, buff_, valid_cnt, param_.gamma, param_.alpha);
+    SoftmaxFocalLossBackwardAcc(data, label, prob, grad_in, grad_out, buff_, param_.gamma, param_.alpha);
   }
 
 private:
@@ -207,7 +177,7 @@ public:
 
     // label: (N, A)
     TShape lshape = in_shape->at(focalloss::kLabel);
-    CHECK_EQ(lshape.ndim(), 3U) << "label should be a 3D tensor";
+    CHECK_EQ(lshape.ndim(), 2U) << "label should be a 3D tensor";
 
     out_shape->clear();
     // loss: (N, A)
